@@ -1,0 +1,26 @@
+# Git
+.git
+.gitignore
+
+# Python
+.venv
+__pycache__
+*.py[cod]
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# Secrets — block everything except the example
+.env
+.env.*
+!.env.example
+
+# dbt artifacts (we'll regenerate inside the container)
+dbt/target
+dbt/dbt_packages
+dbt/logs
+
+# OS / editor
+.DS_Store
+.vscode
+.idea
