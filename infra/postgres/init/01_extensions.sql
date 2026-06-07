@@ -1,0 +1,1 @@
+CREATE EXTENSION IF NOT EXISTS pg_trgm;  -- extension gives us fast fuzzy string matching
