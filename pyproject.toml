@@ -1,0 +1,44 @@
+[project]
+name = "foodbot"
+version = "0.1.0"
+description = "Personal food tracking via Telegram bot"
+requires-python = ">=3.12"
+dependencies = [
+    # Web framework
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+
+    # Database
+    "sqlalchemy[asyncio]>=2.0.36",
+    "asyncpg>=0.30",            # async driver — used by FastAPI at runtime
+    "psycopg[binary]>=3.2",     # sync driver — used by Alembic for migrations
+    "alembic>=1.14",
+
+    # Validation and config
+    "pydantic>=2.10",
+    "pydantic-settings>=2.6",
+
+    # Logging
+    "structlog>=24.4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.8",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = []
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "N"]
