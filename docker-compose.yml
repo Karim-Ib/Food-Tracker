@@ -28,7 +28,23 @@ services:
       start_period: 10s
     networks:
       - foodbot_net
-
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    image: foodbot-api:latest
+    restart: unless-stopped
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: foodbot
+      APP_USER_PASSWORD: ${APP_USER_PASSWORD}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - foodbot_net
 volumes:
   postgres_data:
 

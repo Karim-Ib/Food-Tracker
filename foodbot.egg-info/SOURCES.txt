@@ -1,0 +1,6 @@
+pyproject.toml
+foodbot.egg-info/PKG-INFO
+foodbot.egg-info/SOURCES.txt
+foodbot.egg-info/dependency_links.txt
+foodbot.egg-info/requires.txt
+foodbot.egg-info/top_level.txt

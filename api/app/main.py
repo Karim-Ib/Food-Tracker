@@ -27,7 +27,7 @@ app = FastAPI(
 @app.get("/health")
 async def health() -> dict[str, str]:
     """Liveness check — does not touch the database."""
-    return {"status": "ok"}
+    return {"status": "alive"}
 
 
 @app.get("/health/db")
