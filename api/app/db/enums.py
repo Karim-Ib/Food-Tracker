@@ -3,7 +3,7 @@ import enum
 
 
 class FoodSource(str, enum.Enum):
-    SYSTEM = "oystem"
+    SYSTEM = "system"
     OPENFOODFACTS = "openFoodFacts"
     USER = "user"
     AI_ESTIMATED = "ai_estimated"
