@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_session
 from app.schemas.users import UserCreate, UserRead
-from app.services.users import UserAlreadyExists, UserService
+from app.services.users import UserAlreadyExists, UserService, UserNotFound
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -41,3 +41,19 @@ async def get_user(
             detail=f"User {user_id} not found",
         )
     return UserRead.model_validate(user)
+
+
+@router.get(
+    "/by-telegram-id/{telegram_id}",
+    response_model=UserRead,
+    responses={404: {"description": "User not found"}},
+)
+async def get_user_by_telegram_id(
+    telegram_id: int,
+    session: AsyncSession = Depends(get_session),
+) -> User:
+    service = UserService(session)
+    try:
+        return await service.get_by_telegram_id(telegram_id)
+    except UserNotFound:
+        raise HTTPException(status_code=404, detail="User not found")

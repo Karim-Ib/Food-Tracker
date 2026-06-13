@@ -12,3 +12,10 @@ services:
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     environment:
       LOG_LEVEL: DEBUG
+
+  bot:
+    volumes:
+      - ./bot/bot:/app/bot
+    command: watchfiles "python -m bot.main" /app/bot
+    environment:
+      LOG_LEVEL: DEBUG

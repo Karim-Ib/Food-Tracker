@@ -8,6 +8,9 @@ from app.schemas.users import UserCreate
 class UserAlreadyExists(Exception):
     """Raised when trying to create a user whose telegram_id is already taken."""
 
+class UserNotFound(Exception):
+    """Raised when a user lookup returns nothing."""
+    pass
 
 class UserService:
     def __init__(self, session: AsyncSession) -> None:
@@ -31,3 +34,12 @@ class UserService:
 
     async def get_user(self, user_id: int) -> User | None:
         return await self.users.get_by_id(user_id)
+
+    async def get_by_telegram_id(self, telegram_id: int) -> User:
+        """Fetch a user by their Telegram ID. Raises UserNotFound if absent."""
+        user = await self.users.get_by_telegram_id(telegram_id)
+        if user is None:
+            raise UserNotFound(
+                f"No user with telegram_id={telegram_id}"
+            )
+        return user
