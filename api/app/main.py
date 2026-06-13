@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import engine, get_session
 from app.routes import users as users_routes
-
+from app.routes.foods import router as foods_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -25,6 +25,7 @@ app = FastAPI(
 )
 
 app.include_router(users_routes.router)
+app.include_router(foods_router)
 
 @app.get("/health")
 async def health() -> dict[str, str]:
@@ -38,3 +39,4 @@ async def health_db(session: AsyncSession = Depends(get_session)) -> dict[str, s
     result = await session.execute(text("SELECT 1"))
     value = result.scalar_one()
     return {"status": "ok", "db": "ok" if value == 1 else "unexpected"}
+
