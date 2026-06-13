@@ -25,3 +25,6 @@ dbt/logs/
 Thumbs.db
 .vscode/
 .idea/
+
+#misc
+docs/

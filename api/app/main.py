@@ -5,6 +5,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import engine, get_session
+from app.routes import users as users_routes
 
 
 @asynccontextmanager
@@ -23,6 +24,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.include_router(users_routes.router)
 
 @app.get("/health")
 async def health() -> dict[str, str]:
