@@ -6,6 +6,8 @@ psycopg[binary]>=3.2
 alembic>=1.14
 pydantic>=2.10
 pydantic-settings>=2.6
+httpx>=0.28.0
+python-telegram-bot[ext]>=21.9
 structlog>=24.4
 
 [dev]

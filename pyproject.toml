@@ -18,6 +18,12 @@ dependencies = [
     "pydantic>=2.10",
     "pydantic-settings>=2.6",
 
+    #http client
+    "httpx>=0.28.0",
+
+    #telegram
+    "python-telegram-bot[ext]>=21.9",
+
     # Logging
     "structlog>=24.4",
 ]

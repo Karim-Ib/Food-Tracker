@@ -11,6 +11,8 @@ Requires-Dist: psycopg[binary]>=3.2
 Requires-Dist: alembic>=1.14
 Requires-Dist: pydantic>=2.10
 Requires-Dist: pydantic-settings>=2.6
+Requires-Dist: httpx>=0.28.0
+Requires-Dist: python-telegram-bot[ext]>=21.9
 Requires-Dist: structlog>=24.4
 Provides-Extra: dev
 Requires-Dist: pytest>=8.3; extra == "dev"
