@@ -27,7 +27,9 @@ class APIClient:
 
     async def get_user_by_telegram_id(self, telegram_id: int) -> dict | None:
         """Return user profile by Telegram ID, or None if no such user."""
-        response = await self._client.get(f"/users/by-telegram-id/{telegram_id}")
+        response = await self._client.get(
+            f"/users/by-telegram-id/{telegram_id}"
+        )
         if response.status_code == 404:
             return None
         response.raise_for_status()
@@ -44,5 +46,35 @@ class APIClient:
         )
         response.raise_for_status()
         return response.json()
+
+    async def search_foods(self, query: str, limit: int = 10) -> list[dict]:
+        """Fuzzy-search foods by name. Returns a (possibly empty) list."""
+        response = await self._client.get(
+            "/foods/search",
+            params={"q": query, "limit": limit},
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def create_meal_entry(
+        self,
+        user_id: int,
+        food_id: int,
+        weight_g: float,
+    ) -> dict:
+        """Create a meal entry of source_type='food'. Returns the saved entry."""
+        response = await self._client.post(
+            "/meal-entries",
+            json={
+                "user_id": user_id,
+                "source_type": "food",
+                "food_id": food_id,
+                "weight_g": weight_g,
+            },
+        )
+        response.raise_for_status()
+        return response.json()
+
+
 # Module-level singleton: reused across handlers, owns the connection pool.
 client = APIClient()
