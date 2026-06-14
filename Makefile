@@ -50,3 +50,9 @@ verify:
 	@docker compose exec -T postgres psql -U postgres -d foodbot -c "\du" | grep -E "(app_user|dbt_user)" >/dev/null || (echo "✗ Roles missing"; exit 1)
 	@docker compose exec -T postgres psql -U postgres -d foodbot -c "\dx" | grep pg_trgm >/dev/null || (echo "✗ pg_trgm extension missing"; exit 1)
 	@echo "✓ All checks passed."
+
+restart-bot:
+	docker compose restart bot
+
+restart-api:
+	docker compose restart api

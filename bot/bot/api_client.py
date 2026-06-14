@@ -75,6 +75,31 @@ class APIClient:
         response.raise_for_status()
         return response.json()
 
+    async def parse_food(self, description: str) -> dict:
+        """Call /foods/parse to turn free text into a ParsedFood dict."""
+        response = await self._client.post(
+            "/foods/parse",
+            json={"description": description},
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def create_food_from_parse(
+            self,
+            parsed: dict,
+            user_id: int,
+    ) -> dict:
+        """Save an LLM-parsed food to /foods with the server-side fields filled in."""
+        payload = {
+            **parsed,
+            "source": "ai_estimated",
+            "visibility": "private",
+            "created_by_user_id": user_id,
+        }
+        response = await self._client.post("/foods", json=payload)
+        response.raise_for_status()
+        return response.json()
+
 
 # Module-level singleton: reused across handlers, owns the connection pool.
 client = APIClient()

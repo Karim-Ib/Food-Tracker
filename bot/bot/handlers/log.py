@@ -1,17 +1,25 @@
 """
 /log command — multi-step conversation for logging a meal entry.
 
-Flow:
-    /log <query>      -->  search foods, show inline keyboard      (CHOOSING_FOOD)
-    [tap a food]           ask for weight                          (ENTERING_WEIGHT)
-    [type a number]        show computed macros + Confirm/Cancel   (CONFIRMING)
-    [tap Confirm]          POST meal entry, reply with summary     (END)
+Flow (DB hit):
+    /log <query>     -->  search foods, inline keyboard            (CHOOSING_FOOD)
+    [tap a food]          ask for weight                           (ENTERING_WEIGHT)
+    [type a number]       show macros + Confirm/Cancel             (CONFIRMING)
+    [tap Confirm]         POST meal entry, reply summary           (END)
 
-Partial state carries in context.user_data between messages.
+Flow (DB miss, LLM fallback):
+    /log <query>     -->  DB empty
+                          [typing...] silently call /foods/parse
+                          show parsed nutrition + Save/Cancel      (CONFIRMING_PARSED_FOOD)
+    [tap Save]            POST /foods, merge into weight-entry     (ENTERING_WEIGHT)
+    [tap Cancel]                                                   (END)
+    [parse fails]         show "couldn't parse" message            (END)
 """
 import logging
 
+import httpx
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.constants import ChatAction
 from telegram.ext import (
     CallbackQueryHandler,
     CommandHandler,
@@ -25,31 +33,22 @@ from bot.api_client import client
 
 log = logging.getLogger(__name__)
 
-# Conversation states. Values are arbitrary distinct integers.
-CHOOSING_FOOD, ENTERING_WEIGHT, CONFIRMING = range(3)
+# Conversation states.
+CHOOSING_FOOD, ENTERING_WEIGHT, CONFIRMING, CONFIRMING_PARSED_FOOD = range(4)
 
-# context.user_data keys (constants to catch typos at edit time).
-KEY_FOODS = "log_foods"        # dict[food_id, food_dict] from this search
-KEY_FOOD = "log_food"          # the selected food
-KEY_WEIGHT = "log_weight"      # entered weight in grams
-KEY_USER_ID = "user_id"        # cached internal user id (shared across flows)
-
-async def cancel_via_button(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-) -> int:
-    """Cancel button tap, for states without other callback handlers."""
-    query = update.callback_query
-    await query.answer()
-    await query.edit_message_text("Cancelled.")
-    return ConversationHandler.END
+# context.user_data keys.
+KEY_FOODS = "log_foods"
+KEY_FOOD = "log_food"
+KEY_WEIGHT = "log_weight"
+KEY_USER_ID = "user_id"
+KEY_PARSED = "log_parsed"
 
 
 async def log_start(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ) -> int:
-    """Entry point: /log <query>. Search and present results."""
+    """Entry point: /log <query>. Search DB; on miss, fall through to LLM."""
     query = " ".join(context.args).strip()
     if not query:
         await update.message.reply_text(
@@ -67,12 +66,8 @@ async def log_start(
         return ConversationHandler.END
 
     if not foods:
-        await update.message.reply_text(
-            f"No food matches '{query}'. Try a different name."
-        )
-        return ConversationHandler.END
+        return await _parse_via_llm(update, context, query)
 
-    # Cache foods so we can look up the chosen one by id later.
     context.user_data[KEY_FOODS] = {f["id"]: f for f in foods}
 
     keyboard = [
@@ -88,13 +83,114 @@ async def log_start(
     return CHOOSING_FOOD
 
 
+async def _parse_via_llm(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    description: str,
+) -> int:
+    """DB returned empty. Silently call /foods/parse and show the result."""
+    await context.bot.send_chat_action(
+        chat_id=update.effective_chat.id,
+        action=ChatAction.TYPING,
+    )
+
+    try:
+        parsed = await client.parse_food(description)
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 422:
+            await update.message.reply_text(
+                f"I couldn't recognize '{description}'. Try describing it differently."
+            )
+        else:
+            log.warning("parse_food failed: %s", exc)
+            await update.message.reply_text(
+                "Couldn't parse that right now. Try again in a moment."
+            )
+        return ConversationHandler.END
+    except Exception:
+        log.exception("parse_food unexpected error")
+        await update.message.reply_text("Couldn't parse that. Try again later.")
+        return ConversationHandler.END
+
+    context.user_data[KEY_PARSED] = parsed
+
+    title = f"*{parsed['name']}*"
+    if parsed.get("brand"):
+        title += f" — {parsed['brand']}"
+
+    msg = (
+        f"{title}\n"
+        f"Per 100g:\n"
+        f"  {parsed['kcal_100g']:.0f} kcal\n"
+        f"  {parsed['protein_100g']:.1f}g protein\n"
+        f"  {parsed['fat_100g']:.1f}g fat\n"
+        f"  {parsed['carbs_100g']:.1f}g carbs"
+    )
+
+    keyboard = [[
+        InlineKeyboardButton("Save", callback_data="save"),
+        InlineKeyboardButton("Cancel", callback_data="cancel"),
+    ]]
+
+    await update.message.reply_text(
+        msg,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="Markdown",
+    )
+    return CONFIRMING_PARSED_FOOD
+
+
+async def confirm_parsed_food(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> int:
+    """User tapped Save or Cancel on the LLM-parsed food."""
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "cancel":
+        await query.edit_message_text("Cancelled.")
+        return ConversationHandler.END
+
+    user_id = context.user_data.get(KEY_USER_ID)
+    if user_id is None:
+        profile = await client.get_user_by_telegram_id(update.effective_user.id)
+        if profile is None:
+            await query.edit_message_text(
+                "You don't have a profile yet. Send /whoami first."
+            )
+            return ConversationHandler.END
+        user_id = profile["id"]
+        context.user_data[KEY_USER_ID] = user_id
+
+    parsed = context.user_data[KEY_PARSED]
+
+    try:
+        saved_food = await client.create_food_from_parse(parsed, user_id)
+    except Exception:
+        log.exception("create_food_from_parse failed")
+        await query.edit_message_text("Couldn't save the food. Try /log again.")
+        return ConversationHandler.END
+
+    # Merge into the existing weight-entry flow.
+    context.user_data[KEY_FOOD] = saved_food
+
+    keyboard = [[InlineKeyboardButton("Cancel", callback_data="cancel")]]
+    await query.edit_message_text(
+        f"Saved *{saved_food['name']}*.\n\nHow many grams did you eat?",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="Markdown",
+    )
+    return ENTERING_WEIGHT
+
+
 async def food_chosen(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ) -> int:
-    """User tapped a food button. Move to weight entry."""
+    """User tapped a food button from the DB-match keyboard."""
     query = update.callback_query
-    await query.answer()  # dismiss spinner
+    await query.answer()
 
     if query.data == "cancel":
         await query.edit_message_text("Cancelled.")
@@ -125,7 +221,7 @@ async def weight_entered(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ) -> int:
-    """User typed a number. Show macro breakdown and ask for confirmation."""
+    """User typed a number. Show macro breakdown + Confirm/Cancel."""
     text = update.message.text.strip().replace(",", ".")
     try:
         weight = float(text)
@@ -133,7 +229,7 @@ async def weight_entered(
         await update.message.reply_text(
             "That's not a number. Try again, e.g. `150`."
         )
-        return ENTERING_WEIGHT  # stay in same state
+        return ENTERING_WEIGHT
     if weight <= 0:
         await update.message.reply_text("Weight must be positive. Try again.")
         return ENTERING_WEIGHT
@@ -168,7 +264,7 @@ async def confirm(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ) -> int:
-    """User tapped Confirm or Cancel. Save or abort."""
+    """Final confirmation on meal entry."""
     query = update.callback_query
     await query.answer()
 
@@ -176,7 +272,6 @@ async def confirm(
         await query.edit_message_text("Cancelled.")
         return ConversationHandler.END
 
-    # Resolve user_id, caching for future flows.
     user_id = context.user_data.get(KEY_USER_ID)
     if user_id is None:
         profile = await client.get_user_by_telegram_id(update.effective_user.id)
@@ -206,6 +301,17 @@ async def confirm(
     return ConversationHandler.END
 
 
+async def cancel_via_button(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> int:
+    """Cancel button tap for states without other callback handlers."""
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text("Cancelled.")
+    return ConversationHandler.END
+
+
 async def cancel_command(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -216,16 +322,16 @@ async def cancel_command(
 
 
 def build_log_handler() -> ConversationHandler:
-    """Factory: returns the configured ConversationHandler for /log."""
     return ConversationHandler(
         entry_points=[CommandHandler("log", log_start)],
         states={
             CHOOSING_FOOD: [CallbackQueryHandler(food_chosen)],
             ENTERING_WEIGHT: [
                 CallbackQueryHandler(cancel_via_button),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, weight_entered)
+                MessageHandler(filters.TEXT & ~filters.COMMAND, weight_entered),
             ],
             CONFIRMING: [CallbackQueryHandler(confirm)],
+            CONFIRMING_PARSED_FOOD: [CallbackQueryHandler(confirm_parsed_food)],
         },
         fallbacks=[CommandHandler("cancel", cancel_command)],
     )
