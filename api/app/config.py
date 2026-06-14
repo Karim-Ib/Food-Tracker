@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     postgres_port: int = 5432
     postgres_db: str = "foodbot"
     app_user_password: str
+    gemini_api_key: str
+    gemini_model: str = "gemini-2.5-flash"
 
     @property
     def app_db_url_sync(self) -> str:

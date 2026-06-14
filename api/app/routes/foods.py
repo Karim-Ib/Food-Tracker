@@ -1,6 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.schemas.parse import FoodParseRequest, ParsedFood
+from app.services.llm_parser import FoodParseError, parser
+
 from app.db.models import Food
 from app.db.session import get_session
 from app.schemas.foods import FoodCreate, FoodRead
@@ -30,6 +33,21 @@ async def create_food(
     except DuplicateBarcode as exc:
         raise HTTPException(status_code=409, detail=str(exc))
 
+@router.post(
+    "/parse",
+    response_model=ParsedFood,
+    responses={422: {"description": "Could not parse food description"}},
+)
+async def parse_food(data: FoodParseRequest) -> ParsedFood:
+    """Parse a free-text food description into structured nutritional data.
+
+    Stateless — does not write to the foods table. The caller (bot) reviews
+    the parsed output with the user and then POSTs to /foods to persist.
+    """
+    try:
+        return await parser.parse_food(data.description)
+    except FoodParseError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
 @router.get("/search", response_model=list[FoodRead])
 async def search_foods(

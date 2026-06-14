@@ -26,6 +26,9 @@ dependencies = [
 
     # Logging
     "structlog>=24.4",
+
+    # LLM
+    "google-genai>=0.8"
 ]
 
 [project.optional-dependencies]
