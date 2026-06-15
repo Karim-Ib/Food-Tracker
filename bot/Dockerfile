@@ -8,6 +8,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+#get libzbar0 for barcode feature
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends libzbar0 && \
+    rm -rf /var/lib/apt/lists/*
+
+
 # Dependencies first (cached unless pyproject.toml changes)
 COPY pyproject.toml ./
 RUN pip install --upgrade pip && pip install .

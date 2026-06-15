@@ -1,19 +1,21 @@
 """
-/log command — multi-step conversation for logging a meal entry.
+/log command and photo barcode handler — multi-step conversation for logging.
 
-Flow (DB hit):
-    /log <query>     -->  search foods, inline keyboard            (CHOOSING_FOOD)
-    [tap a food]          ask for weight                           (ENTERING_WEIGHT)
-    [type a number]       show macros + Confirm/Cancel             (CONFIRMING)
-    [tap Confirm]         POST meal entry, reply summary           (END)
+Flows:
 
-Flow (DB miss, LLM fallback):
-    /log <query>     -->  DB empty
-                          [typing...] silently call /foods/parse
-                          show parsed nutrition + Save/Cancel      (CONFIRMING_PARSED_FOOD)
-    [tap Save]            POST /foods, merge into weight-entry     (ENTERING_WEIGHT)
-    [tap Cancel]                                                   (END)
-    [parse fails]         show "couldn't parse" message            (END)
+    /log <text>:
+        search foods                       (CHOOSING_FOOD)
+        on miss: typing -> LLM             (CONFIRMING_PARSED_FOOD)
+        select food -> grams               (ENTERING_WEIGHT)
+        macros -> confirm                  (CONFIRMING)
+
+    [photo]:
+        decode barcode -> OFF lookup
+        on hit -> grams                    (ENTERING_WEIGHT, same as DB hit)
+        on miss -> describe                (AWAITING_DESCRIPTION)
+        description -> LLM                 (CONFIRMING_PARSED_FOOD)
+
+All entry paths converge on ENTERING_WEIGHT once a food is identified.
 """
 import logging
 
@@ -30,11 +32,18 @@ from telegram.ext import (
 )
 
 from bot.api_client import client
+from bot.barcode import decode_barcodes
 
 log = logging.getLogger(__name__)
 
 # Conversation states.
-CHOOSING_FOOD, ENTERING_WEIGHT, CONFIRMING, CONFIRMING_PARSED_FOOD = range(4)
+(
+    CHOOSING_FOOD,
+    ENTERING_WEIGHT,
+    CONFIRMING,
+    CONFIRMING_PARSED_FOOD,
+    AWAITING_DESCRIPTION,
+) = range(5)
 
 # context.user_data keys.
 KEY_FOODS = "log_foods"
@@ -44,11 +53,12 @@ KEY_USER_ID = "user_id"
 KEY_PARSED = "log_parsed"
 
 
+# ---------- Entry: /log <text> ----------
+
 async def log_start(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ) -> int:
-    """Entry point: /log <query>. Search DB; on miss, fall through to LLM."""
     query = " ".join(context.args).strip()
     if not query:
         await update.message.reply_text(
@@ -83,12 +93,104 @@ async def log_start(
     return CHOOSING_FOOD
 
 
+# ---------- Entry: photo -> barcode ----------
+
+async def photo_entry(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> int:
+    """User sent a photo. Decode any barcode and look it up."""
+    # Telegram sends multiple photo sizes; take the highest resolution.
+    photo = update.message.photo[-1]
+    try:
+        file = await photo.get_file()
+        image_bytes = bytes(await file.download_as_bytearray())
+    except Exception:
+        log.exception("Failed to download photo")
+        await update.message.reply_text(
+            "Couldn't download that photo. Try again?"
+        )
+        return ConversationHandler.END
+
+    barcodes = decode_barcodes(image_bytes)
+    if not barcodes:
+        await update.message.reply_text(
+            "Couldn't find a barcode in that image. "
+            "Try a clearer photo, or use `/log <description>` instead.",
+            parse_mode="Markdown",
+        )
+        return ConversationHandler.END
+
+    barcode = barcodes[0]
+
+    await context.bot.send_chat_action(
+        chat_id=update.effective_chat.id,
+        action=ChatAction.TYPING,
+    )
+
+    try:
+        food = await client.get_food_by_barcode(barcode)
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 404:
+            context.user_data["pending_barcode"] = barcode
+            await update.message.reply_text(
+                f"Found barcode `{barcode}`, but it's not in our database or "
+                f"OpenFoodFacts.\n\n"
+                f"Describe the product (e.g. 'Spar protein bar, 380kcal per 100g, "
+                f"22g protein'):",
+                parse_mode="Markdown",
+            )
+            return AWAITING_DESCRIPTION
+        log.warning("get_food_by_barcode failed: %s", exc)
+        await update.message.reply_text(
+            "Couldn't look that up. Try again in a moment."
+        )
+        return ConversationHandler.END
+    except Exception:
+        log.exception("get_food_by_barcode unexpected error")
+        await update.message.reply_text("Couldn't look that up. Try again later.")
+        return ConversationHandler.END
+
+    # OFF/DB hit — same shape as a food selected from the keyboard
+    context.user_data[KEY_FOOD] = food
+
+    keyboard = [[InlineKeyboardButton("Cancel", callback_data="cancel")]]
+    title = f"*{food['name']}*"
+    if food.get("brand"):
+        title += f" — {food['brand']}"
+
+    await update.message.reply_text(
+        f"{title}\n"
+        f"({food['kcal_100g']} kcal per 100g)\n\n"
+        f"How many grams?",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="Markdown",
+    )
+    return ENTERING_WEIGHT
+
+
+# ---------- AWAITING_DESCRIPTION: user types after barcode miss ----------
+
+async def description_received(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> int:
+    """User typed a description after we couldn't resolve their barcode."""
+    description = update.message.text.strip()
+    if not description:
+        await update.message.reply_text("Need a description to look up. Try again.")
+        return AWAITING_DESCRIPTION
+
+    return await _parse_via_llm(update, context, description)
+
+
+# ---------- LLM fallback (shared by text path and barcode-miss path) ----------
+
 async def _parse_via_llm(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
     description: str,
 ) -> int:
-    """DB returned empty. Silently call /foods/parse and show the result."""
     await context.bot.send_chat_action(
         chat_id=update.effective_chat.id,
         action=ChatAction.TYPING,
@@ -111,6 +213,10 @@ async def _parse_via_llm(
         log.exception("parse_food unexpected error")
         await update.message.reply_text("Couldn't parse that. Try again later.")
         return ConversationHandler.END
+
+    # If we arrived here via a barcode miss, attach the barcode for the save step
+    if barcode := context.user_data.pop("pending_barcode", None):
+        parsed["barcode"] = barcode
 
     context.user_data[KEY_PARSED] = parsed
 
@@ -140,11 +246,12 @@ async def _parse_via_llm(
     return CONFIRMING_PARSED_FOOD
 
 
+# ---------- Existing handlers (unchanged from Phase 5) ----------
+
 async def confirm_parsed_food(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ) -> int:
-    """User tapped Save or Cancel on the LLM-parsed food."""
     query = update.callback_query
     await query.answer()
 
@@ -169,10 +276,9 @@ async def confirm_parsed_food(
         saved_food = await client.create_food_from_parse(parsed, user_id)
     except Exception:
         log.exception("create_food_from_parse failed")
-        await query.edit_message_text("Couldn't save the food. Try /log again.")
+        await query.edit_message_text("Couldn't save the food. Try again.")
         return ConversationHandler.END
 
-    # Merge into the existing weight-entry flow.
     context.user_data[KEY_FOOD] = saved_food
 
     keyboard = [[InlineKeyboardButton("Cancel", callback_data="cancel")]]
@@ -188,7 +294,6 @@ async def food_chosen(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ) -> int:
-    """User tapped a food button from the DB-match keyboard."""
     query = update.callback_query
     await query.answer()
 
@@ -221,7 +326,6 @@ async def weight_entered(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ) -> int:
-    """User typed a number. Show macro breakdown + Confirm/Cancel."""
     text = update.message.text.strip().replace(",", ".")
     try:
         weight = float(text)
@@ -264,7 +368,6 @@ async def confirm(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ) -> int:
-    """Final confirmation on meal entry."""
     query = update.callback_query
     await query.answer()
 
@@ -305,7 +408,6 @@ async def cancel_via_button(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ) -> int:
-    """Cancel button tap for states without other callback handlers."""
     query = update.callback_query
     await query.answer()
     await query.edit_message_text("Cancelled.")
@@ -316,14 +418,16 @@ async def cancel_command(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ) -> int:
-    """/cancel works at any state."""
     await update.message.reply_text("Cancelled.")
     return ConversationHandler.END
 
 
 def build_log_handler() -> ConversationHandler:
     return ConversationHandler(
-        entry_points=[CommandHandler("log", log_start)],
+        entry_points=[
+            CommandHandler("log", log_start),
+            MessageHandler(filters.PHOTO, photo_entry),
+        ],
         states={
             CHOOSING_FOOD: [CallbackQueryHandler(food_chosen)],
             ENTERING_WEIGHT: [
@@ -332,6 +436,10 @@ def build_log_handler() -> ConversationHandler:
             ],
             CONFIRMING: [CallbackQueryHandler(confirm)],
             CONFIRMING_PARSED_FOOD: [CallbackQueryHandler(confirm_parsed_food)],
+            AWAITING_DESCRIPTION: [
+                CallbackQueryHandler(cancel_via_button),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, description_received),
+            ],
         },
         fallbacks=[CommandHandler("cancel", cancel_command)],
     )

@@ -100,6 +100,11 @@ class APIClient:
         response.raise_for_status()
         return response.json()
 
+    async def get_food_by_barcode(self, barcode: str) -> dict:
+        """Look up a food by exact barcode. Raises HTTPStatusError on 404."""
+        response = await self._client.get(f"/foods/by-barcode/{barcode}")
+        response.raise_for_status()
+        return response.json()
 
 # Module-level singleton: reused across handlers, owns the connection pool.
 client = APIClient()

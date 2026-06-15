@@ -28,7 +28,10 @@ dependencies = [
     "structlog>=24.4",
 
     # LLM
-    "google-genai>=0.8"
+    "google-genai>=0.8",
+
+    "pyzbar>=0.1.9",
+    "Pillow>=10.0"
 ]
 
 [project.optional-dependencies]
