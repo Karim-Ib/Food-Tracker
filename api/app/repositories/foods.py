@@ -48,3 +48,10 @@ class FoodRepository:
         )
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
+
+    async def get_by_barcode(self, barcode: str) -> Optional[Food]:
+        """Look up a food by exact barcode match. Uses the partial unique index."""
+        result = await self.session.execute(
+            select(Food).where(Food.barcode == barcode)
+        )
+        return result.scalar_one_or_none()

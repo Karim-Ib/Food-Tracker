@@ -5,6 +5,8 @@ from app.db.models import Food
 from app.repositories.foods import FoodRepository
 from app.schemas.foods import FoodCreate
 
+from app.db.enums import FoodSource, Visibility
+from app.services.openfoodfacts import off_client
 
 class FoodNotFound(Exception):
     """Raised when a food lookup returns nothing."""
@@ -48,3 +50,31 @@ class FoodService:
         # No business logic yet — thin pass-through. Will grow a visibility
         # filter when user-created (private) foods land in Phase 5.
         return await self.foods.search_by_name(query=query, limit=limit)
+
+    async def lookup_by_barcode(self, barcode: str) -> Food:
+        """Look up a food by barcode: DB cache first, then OpenFoodFacts.
+
+        On OFF hit, saves the result to the foods table for future cached lookups.
+        Raises FoodNotFound if neither source has the barcode.
+        """
+        # Tier 1: local DB cache
+        food = await self.foods.get_by_barcode(barcode)
+        if food is not None:
+            return food
+
+        # Tier 2: OpenFoodFacts
+        off_data = await off_client.lookup(barcode)
+        if off_data is None:
+            raise FoodNotFound(
+                f"Barcode {barcode!r} not in DB or OpenFoodFacts"
+            )
+
+        # Save the OFF hit as a public food (no owner — everyone benefits)
+        food = await self.foods.create(
+            **off_data,
+            source=FoodSource.OPENFOODFACTS,
+            visibility=Visibility.PUBLIC,
+            created_by_user_id=None,
+        )
+        await self.session.commit()
+        return food

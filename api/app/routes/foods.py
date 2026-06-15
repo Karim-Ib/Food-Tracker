@@ -73,3 +73,22 @@ async def get_food(
         return await service.get_food(food_id)
     except FoodNotFound:
         raise HTTPException(status_code=404, detail="Food not found")
+
+@router.get(
+    "/by-barcode/{barcode}",
+    response_model=FoodRead,
+    responses={404: {"description": "Barcode not found in DB or OpenFoodFacts"}},
+)
+async def get_food_by_barcode(
+    barcode: str,
+    session: AsyncSession = Depends(get_session),
+) -> Food:
+    """Look up a food by exact barcode. Uses tiered DB cache + OFF."""
+    service = FoodService(session)
+    try:
+        return await service.lookup_by_barcode(barcode)
+    except FoodNotFound:
+        raise HTTPException(
+            status_code=404,
+            detail="Barcode not found",
+        )
