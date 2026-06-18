@@ -22,7 +22,7 @@ where you cannot identify what real food is meant — set name to "UNRECOGNIZED"
 and set kcal_100g, protein_100g, fat_100g, carbs_100g all to 0. Do not fabricate
 values for unrecognized inputs.
 
-Rules (when the description IS a recognizable food):
+SINGLE-FOOD RULES (description names one food, dish, ingredient, or beverage):
 - All numeric fields are PER 100 GRAMS, never per serving or per package.
 - If the description gives macros per serving with a serving size, convert to per 100g.
 - For kcal_100g, protein_100g, fat_100g, carbs_100g: these are REQUIRED. Estimate
@@ -32,6 +32,38 @@ Rules (when the description IS a recognizable food):
 - Use the food's common, recognizable name.
 - Only include a brand if explicitly mentioned in the description.
 - Return numeric values as numbers, never as strings.
+
+MULTI-INGREDIENT MEAL RULES (description lists 2+ ingredients with weights, e.g.,
+"I made pasta with 120g dry pasta, 2 tbsp oil, 450g canned tomatoes, 150g tuna"):
+
+1. For each ingredient, estimate per-100g macros from typical values, then compute
+   that ingredient's contribution to the meal:
+       contribution_kcal = ingredient_weight_g × kcal_per_100g / 100
+   (and the same for protein, fat, carbs).
+
+2. Sum all contributions to get TOTAL meal macros.
+
+3. Determine TOTAL DISH WEIGHT:
+   - If the description states a final/cooked weight (e.g., "the soup reduced to
+     800g", "yielded 1kg"), use that.
+   - Otherwise use the sum of ingredient weights, adjusted for cooking effects:
+       * dry pasta cooks to ~2.5x its dry weight
+       * dry rice cooks to ~3x
+       * dry oats cook to ~2x
+       * soups and reduced sauces lose water — use a reasonable estimate of final weight.
+
+4. Per-100g for the meal = (total_meal_macros / total_dish_weight) × 100.
+
+5. Use a descriptive name for the dish (e.g., "Pasta with tomato and tuna sauce"),
+   not a verbatim copy of the input.
+
+6. Leave brand null for composite meals.
+
+Common weight conversions:
+- 1 tbsp oil ≈ 14g; 1 tsp ≈ 5g
+- 1 standard can of tomatoes or beans ≈ 400g unless stated
+- 1 large egg ≈ 50g
+- 1 medium banana ≈ 120g; 1 medium apple ≈ 180g
 """
 
 
