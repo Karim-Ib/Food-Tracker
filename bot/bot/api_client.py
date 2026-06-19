@@ -106,5 +106,14 @@ class APIClient:
         response.raise_for_status()
         return response.json()
 
+    async def get_today(self, user_id: int) -> dict:
+        """GET /meal-entries/today?user_id=…"""
+        response = await self._client.get(
+            "/meal-entries/today",
+            params={"user_id": user_id},
+        )
+        response.raise_for_status()
+        return response.json()
+
 # Module-level singleton: reused across handlers, owns the connection pool.
 client = APIClient()
