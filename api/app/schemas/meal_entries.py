@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, date
 from decimal import Decimal
 from typing import Optional
 
@@ -45,3 +45,30 @@ class MealEntryRead(MealEntryBase):
     user_id: int
     consumed_at: datetime
     created_at: datetime
+
+
+class DailyTotals(BaseModel):
+    """Aggregated macros for a single day."""
+    kcal: Decimal
+    protein: Decimal
+    fat: Decimal
+    carbs: Decimal
+
+
+class MealEntryTodayItem(BaseModel):
+    """One meal entry in the /today response, denormalized with food info."""
+    id: int
+    consumed_at: datetime
+    weight_g: Decimal
+    food_name: str
+    kcal: Decimal
+    protein: Decimal
+    fat: Decimal
+    carbs: Decimal
+
+
+class TodayResponse(BaseModel):
+    """GET /meal-entries/today response shape."""
+    day: date
+    entries: list[MealEntryTodayItem]
+    totals: DailyTotals

@@ -224,7 +224,8 @@ class MealEntry(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
-
+    food: Mapped[Optional["Food"]] = relationship(lazy="raise")
+    recipe: Mapped[Optional["Recipe"]] = relationship(lazy="raise")
 
 class BodyMetric(Base):
     __tablename__ = "body_metrics"

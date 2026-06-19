@@ -1,11 +1,11 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import MealEntry
 from app.db.session import get_session
-from app.schemas.meal_entries import MealEntryCreate, MealEntryRead
+from app.schemas.meal_entries import MealEntryCreate, MealEntryRead, TodayResponse
 from app.services.meal_entries import MealEntryService
-
+from app.services.users import UserNotFound
 
 router = APIRouter(prefix="/meal-entries", tags=["meal-entries"])
 
@@ -17,3 +17,19 @@ async def create_meal_entry(
 ) -> MealEntry:
     service = MealEntryService(session)
     return await service.create_entry(data)
+
+@router.get(
+    "/today",
+    response_model=TodayResponse,
+    responses={404: {"description": "User not found"}},
+)
+async def get_today(
+    user_id: int = Query(..., gt=0),
+    session: AsyncSession = Depends(get_session),
+) -> TodayResponse:
+    """Today's meal entries for the user, with computed daily totals."""
+    service = MealEntryService(session)
+    try:
+        return await service.list_for_today(user_id)
+    except UserNotFound:
+        raise HTTPException(status_code=404, detail="User not found")
