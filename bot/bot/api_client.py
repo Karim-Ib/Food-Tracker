@@ -115,5 +115,32 @@ class APIClient:
         response.raise_for_status()
         return response.json()
 
+    async def create_body_metric(
+            self,
+            user_id: int,
+            weight_kg: float | None = None,
+            body_fat_pct: float | None = None,
+            notes: str | None = None,
+    ) -> dict:
+        response = await self._client.post(
+            "/body-metrics",
+            json={
+                "user_id": user_id,
+                "weight_kg": weight_kg,
+                "body_fat_pct": body_fat_pct,
+                "notes": notes,
+            },
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def get_recent_body_metrics(self, user_id: int, limit: int = 10) -> list[dict]:
+        response = await self._client.get(
+            "/body-metrics/recent",
+            params={"user_id": user_id, "limit": limit},
+        )
+        response.raise_for_status()
+        return response.json()
+
 # Module-level singleton: reused across handlers, owns the connection pool.
 client = APIClient()

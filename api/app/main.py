@@ -8,6 +8,7 @@ from app.db.session import engine, get_session
 from app.routes import users as users_routes
 from app.routes.foods import router as foods_router
 from app.routes.meal_entries import router as meal_entries_router
+from app.routes import body_metrics
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -28,6 +29,7 @@ app = FastAPI(
 app.include_router(users_routes.router)
 app.include_router(foods_router)
 app.include_router(meal_entries_router)
+app.include_router(body_metrics.router)
 
 @app.get("/health")
 async def health() -> dict[str, str]:
