@@ -142,5 +142,23 @@ class APIClient:
         response.raise_for_status()
         return response.json()
 
+    async def get_week(self, user_id: int) -> dict:
+        response = await self._client.get("/meal-entries/week", params={"user_id": user_id})
+        response.raise_for_status()
+        return response.json()
+
+    async def get_status(self, user_id: int) -> dict:
+        response = await self._client.get("/meal-entries/status", params={"user_id": user_id})
+        response.raise_for_status()
+        return response.json()
+
+    async def update_goal(self, user_id: int, field: str, value: float) -> dict:
+        response = await self._client.patch(
+            f"/users/{user_id}/goal",
+            json={field: value},
+        )
+        response.raise_for_status()
+        return response.json()
+
 # Module-level singleton: reused across handlers, owns the connection pool.
 client = APIClient()

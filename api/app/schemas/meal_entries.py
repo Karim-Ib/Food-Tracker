@@ -5,6 +5,7 @@ from typing import Optional
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.db.enums import EntrySource
+from app.schemas.goals import GoalRead
 
 
 class MealEntryBase(BaseModel):
@@ -72,3 +73,22 @@ class TodayResponse(BaseModel):
     day: date
     entries: list[MealEntryTodayItem]
     totals: DailyTotals
+
+class DayTotals(BaseModel):
+    day: date
+    kcal: Decimal
+    protein: Decimal
+    fat: Decimal
+    carbs: Decimal
+
+
+class WeekResponse(BaseModel):
+    week_start: date
+    days: list[DayTotals]
+    totals: DailyTotals
+
+
+class DailyStatus(BaseModel):
+    day: date
+    totals: DailyTotals
+    targets: GoalRead

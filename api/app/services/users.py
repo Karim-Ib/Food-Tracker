@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models import User
 from app.repositories.users import UserRepository
 from app.schemas.users import UserCreate
+from app.schemas.goals import GoalRead, GoalUpdate
 
 
 class UserAlreadyExists(Exception):
@@ -43,3 +44,16 @@ class UserService:
                 f"No user with telegram_id={telegram_id}"
             )
         return user
+
+    async def update_goal(self, user_id: int, payload: GoalUpdate) -> GoalRead:
+        user = await self.users.get_by_id(user_id)
+        if user is None:
+            raise UserNotFound(f"No user with id={user_id}")
+
+        # Apply only the fields actually provided (exclude_unset drops the Nones
+        # the bot didn't send, so a kcal-only update leaves protein/fat/carbs intact).
+        for field, value in payload.model_dump(exclude_unset=True).items():
+            setattr(user, field, value)
+
+        await self.session.commit()
+        return GoalRead.model_validate(user)

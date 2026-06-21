@@ -8,6 +8,8 @@ from bot.handlers.whoami import whoami_command
 from bot.handlers.log import build_log_handler
 from bot.handlers.today import today_command
 from bot.handlers.weight import weight_command
+from bot.handlers.status import status_command, week_command
+from bot.handlers.goal import goal_command
 
 logging.basicConfig(
     format="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s",
@@ -26,6 +28,9 @@ def main() -> None:
     app.add_handler(build_log_handler())
     app.add_handler(CommandHandler("today", today_command))
     app.add_handler(CommandHandler("weight", weight_command))
+    app.add_handler(CommandHandler("status", status_command))
+    app.add_handler(CommandHandler("week", week_command))
+    app.add_handler(CommandHandler("goal", goal_command))
     # Long-polling: dial out to Telegram, ask for updates in a loop.
     app.run_polling(drop_pending_updates=True)
 

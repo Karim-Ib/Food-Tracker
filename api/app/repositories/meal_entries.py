@@ -56,3 +56,22 @@ class MealEntryRepository:
         )
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
+
+    async def list_for_range(
+            self,
+            user_id: int,
+            start_utc: datetime,
+            end_utc: datetime,
+    ) -> list[MealEntry]:
+        """All entries for a user within a UTC half-open interval [start, end)."""
+        result = await self.session.execute(
+            select(MealEntry)
+            .where(
+                MealEntry.user_id == user_id,
+                MealEntry.consumed_at >= start_utc,
+                MealEntry.consumed_at < end_utc,
+            )
+            .order_by(MealEntry.consumed_at)
+            .options(selectinload(MealEntry.food))
+        )
+        return list(result.scalars().all())

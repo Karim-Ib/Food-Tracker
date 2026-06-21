@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_session
 from app.schemas.users import UserCreate, UserRead
 from app.services.users import UserAlreadyExists, UserService, UserNotFound
-
+from app.schemas.goals import GoalRead, GoalUpdate
 router = APIRouter(prefix="/users", tags=["users"])
 
 
@@ -55,5 +55,21 @@ async def get_user_by_telegram_id(
     service = UserService(session)
     try:
         return await service.get_by_telegram_id(telegram_id)
+    except UserNotFound:
+        raise HTTPException(status_code=404, detail="User not found")
+
+@router.patch(
+    "/{user_id}/goal",
+    response_model=GoalRead,
+    responses={404: {"description": "User not found"}},
+)
+async def update_goal(
+    user_id: int,
+    payload: GoalUpdate,
+    session: AsyncSession = Depends(get_session),
+) -> GoalRead:
+    service = UserService(session)
+    try:
+        return await service.update_goal(user_id, payload)
     except UserNotFound:
         raise HTTPException(status_code=404, detail="User not found")
