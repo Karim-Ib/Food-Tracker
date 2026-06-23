@@ -17,6 +17,9 @@ class MealEntryBase(BaseModel):
     weight_g: Decimal = Field(..., gt=0)
     notes: Optional[str] = Field(None, max_length=500)
 
+class MealEntryBatchCreate(BaseModel):
+    """Input for POST /meal-entries/batch — log several entries atomically."""
+    entries: list[MealEntryCreate] = Field(..., min_length=1, max_length=25)
 
 class MealEntryCreate(MealEntryBase):
     """Input shape for POST /meal-entries."""

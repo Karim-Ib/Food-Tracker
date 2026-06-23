@@ -183,3 +183,19 @@ class MealEntryService:
             totals=DailyTotals(kcal=k, protein=p, fat=f, carbs=c),
             targets=GoalRead.model_validate(user),
         )
+
+    async def create_entries(
+            self, items: list[MealEntryCreate]
+    ) -> list[MealEntry]:
+        """Create several entries in one transaction — all succeed or none do."""
+        now = datetime.now(timezone.utc)
+        rows: list[dict] = []
+        for item in items:
+            fields = item.model_dump()
+            if fields.get("consumed_at") is None:
+                fields["consumed_at"] = now
+            rows.append(fields)
+
+        entries = await self.entries.create_many(rows)
+        await self.session.commit()
+        return entries

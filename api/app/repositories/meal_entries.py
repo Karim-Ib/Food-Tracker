@@ -75,3 +75,10 @@ class MealEntryRepository:
             .options(selectinload(MealEntry.food))
         )
         return list(result.scalars().all())
+
+    async def create_many(self, entries: list[dict]) -> list[MealEntry]:
+        """Insert several entries in the current transaction. Caller commits."""
+        objs = [MealEntry(**fields) for fields in entries]
+        self.session.add_all(objs)
+        await self.session.flush()
+        return objs

@@ -160,5 +160,14 @@ class APIClient:
         response.raise_for_status()
         return response.json()
 
+    async def create_meal_entries(self, entries: list[dict]) -> list[dict]:
+        """Log several meal entries atomically. Each entry: {food_id, weight_g}."""
+        response = await self._client.post(
+            "/meal-entries/batch",
+            json={"entries": entries},
+        )
+        response.raise_for_status()
+        return response.json()
+
 # Module-level singleton: reused across handlers, owns the connection pool.
 client = APIClient()
