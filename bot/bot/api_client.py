@@ -80,6 +80,7 @@ class APIClient:
         response = await self._client.post(
             "/foods/parse",
             json={"description": description},
+            timeout=httpx.Timeout(60.0, connect=5.0),
         )
         response.raise_for_status()
         return response.json()
