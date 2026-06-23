@@ -4,17 +4,27 @@
 Flows:
 
     /log <text>  (single item):
-        search foods                       (CHOOSING_FOOD)
-        on miss: typing -> LLM             (CONFIRMING_PARSED_FOOD)
-        select food -> grams               (ENTERING_WEIGHT)
-        macros -> confirm                  (CONFIRMING)
+        if the text carries macros ("150kcal, 10g protein") -> treat as a
+            description, skip the DB search, go straight to the LLM
+        else fuzzy-search foods                 (CHOOSING_FOOD)
+            keyboard also offers "describe it instead" as an escape
+        on DB miss: typing -> LLM               (CONFIRMING_PARSED_FOOD)
+        select food -> grams                    (ENTERING_WEIGHT)
+        macros -> confirm                       (CONFIRMING)
 
     /log a, b, c  (multi item):
-        split on commas, parse inline weights, resolve each food
-        (DB hit or LLM parse) concurrently
-        walk through items missing a weight     (MULTI_WEIGHT_WALK)
-        one combined confirmation               (MULTI_CONFIRM)
-        confirm -> atomic batch write
+        split on commas, parse inline weights, resolve each food to a list of
+        candidates (top DB matches, or an LLM parse, or unresolved)
+        REVIEW: card showing each item's current pick + a change button
+                                                (MULTI_REVIEW)
+            change an item -> pick from alternatives or describe
+                                                (MULTI_PICK_ITEM)
+            describe an item -> LLM parse just that one
+                                                (MULTI_DESCRIBE_ITEM)
+        looks right -> walk items missing a weight
+                                                (MULTI_WEIGHT_WALK)
+        combined totals confirm -> atomic batch write
+                                                (MULTI_CONFIRM)
 
     [photo]:
         decode barcode -> OFF lookup
@@ -23,7 +33,7 @@ Flows:
         description -> LLM                 (CONFIRMING_PARSED_FOOD)
 
 Single-item paths converge on ENTERING_WEIGHT once a food is identified.
-The multi-item path is a parallel pipeline that ends in an atomic batch write.
+The multi-item path is a parallel pipeline ending in an atomic batch write.
 """
 import asyncio
 import logging
@@ -53,9 +63,12 @@ log = logging.getLogger(__name__)
     CONFIRMING,
     CONFIRMING_PARSED_FOOD,
     AWAITING_DESCRIPTION,
+    MULTI_REVIEW,           # editable card: each item + a change button
+    MULTI_PICK_ITEM,        # per-item alternatives + describe option
+    MULTI_DESCRIBE_ITEM,    # typed override for one item -> LLM
     MULTI_WEIGHT_WALK,      # prompting for each missing weight
-    MULTI_CONFIRM,          # the combined confirmation
-) = range(7)
+    MULTI_CONFIRM,          # combined totals confirmation
+) = range(10)
 
 # context.user_data keys.
 KEY_FOODS = "log_foods"
@@ -63,8 +76,9 @@ KEY_FOOD = "log_food"
 KEY_WEIGHT = "log_weight"
 KEY_USER_ID = "user_id"
 KEY_PARSED = "log_parsed"
-KEY_MULTI_ITEMS = "log_multi_items"   # list of resolved item dicts
-KEY_MULTI_IDX = "log_multi_idx"       # index of item currently being weighed
+KEY_SINGLE_QUERY = "log_single_query"   # original query, for the describe escape
+KEY_MULTI_ITEMS = "log_multi_items"     # list of item dicts (see _multi_start)
+KEY_MULTI_IDX = "log_multi_idx"         # item currently being weighed / edited
 
 
 # ======================================================================
@@ -80,6 +94,8 @@ async def log_start(
         await update.message.reply_text(
             "Usage:\n"
             "• `/log <food>` — log one item\n"
+            "• `/log <food>, 150kcal per 100g, 10g protein` — describe macros "
+            "to skip the database\n"
             "• `/log eggs, oats, banana` — log several at once "
             "(separate foods with commas)\n"
             "• add a weight inline to skip the question: "
@@ -88,11 +104,24 @@ async def log_start(
         )
         return ConversationHandler.END
 
-    # A comma means "several foods" → multi-item path.
     if "," in raw:
         return await _multi_start(update, context, raw)
 
     return await _single_start(update, context, raw)
+
+
+# Signals that an input is a *description with macros*, not a name to search.
+# Matches a number next to an energy/macro unit, or a bare macro keyword.
+_HAS_MACROS = re.compile(
+    r"\d\s*(kcal|cal|calorie|kj)\b"           # "150kcal", "150 cal"
+    r"|\d\s*g\b\s*(protein|fat|carb|carbs)"   # "10g protein"
+    r"|\b(protein|carbs?|kcal|calories)\b",   # bare macro words
+    re.I,
+)
+
+
+def _looks_like_macro_description(text: str) -> bool:
+    return bool(_HAS_MACROS.search(text))
 
 
 async def _single_start(
@@ -100,7 +129,11 @@ async def _single_start(
     context: ContextTypes.DEFAULT_TYPE,
     query: str,
 ) -> int:
-    """Single-item path: DB fuzzy search, then keyboard or LLM fallback."""
+    """Single-item path: macro-aware routing, then DB search or LLM."""
+    # Input carrying macros is a description, not a search query — skip the DB.
+    if _looks_like_macro_description(query):
+        return await _parse_via_llm(update, context, query)
+
     try:
         foods = await client.search_foods(query=query, limit=8)
     except Exception as exc:
@@ -114,11 +147,15 @@ async def _single_start(
         return await _parse_via_llm(update, context, query)
 
     context.user_data[KEY_FOODS] = {f["id"]: f for f in foods}
+    context.user_data[KEY_SINGLE_QUERY] = query
 
     keyboard = [
         [InlineKeyboardButton(f["name"], callback_data=f"food:{f['id']}")]
         for f in foods
     ]
+    keyboard.append(
+        [InlineKeyboardButton("✏️ None of these — describe it", callback_data="describe_single")]
+    )
     keyboard.append([InlineKeyboardButton("Cancel", callback_data="cancel")])
 
     await update.message.reply_text(
@@ -147,22 +184,55 @@ def _split_segment(segment: str) -> tuple[str, float | None]:
     return segment.strip(), None
 
 
-async def _resolve_one(food_text: str) -> dict | None:
-    """Resolve one segment to a food dict: DB hit, else LLM parse, else None.
+async def _resolve_candidates(food_text: str) -> dict:
+    """Resolve one segment to a structured result.
 
-    DB rows have an 'id'; LLM parses don't (they're saved later, only if the
-    user confirms the whole batch). None means the segment was unrecognizable.
+    Returns a dict with:
+      - "text":       the original segment text (for re-describe / labels)
+      - "candidates": list of DB food dicts (top matches, may be empty)
+      - "food":       the current pick (top candidate, or an LLM parse, or None)
+      - "is_parsed":  True if "food" is an unsaved LLM parse
+
+    A segment carrying macros skips the DB and goes straight to the LLM, same
+    rule as the single-item path.
     """
+    if _looks_like_macro_description(food_text):
+        try:
+            parsed = await client.parse_food(food_text)
+        except Exception:
+            parsed = None
+        return {
+            "text": food_text,
+            "candidates": [],
+            "food": parsed,
+            "is_parsed": parsed is not None,
+        }
+
     try:
-        foods = await client.search_foods(query=food_text, limit=1)
+        foods = await client.search_foods(query=food_text, limit=5)
     except Exception:
         foods = []
+
     if foods:
-        return foods[0]
+        return {
+            "text": food_text,
+            "candidates": foods,
+            "food": foods[0],
+            "is_parsed": False,
+        }
+
+    # No DB matches — try the LLM as the current pick, keep candidates empty.
     try:
-        return await client.parse_food(food_text)
+        parsed = await client.parse_food(food_text)
     except Exception:
-        return None
+        parsed = None
+
+    return {
+        "text": food_text,
+        "candidates": [],
+        "food": parsed,
+        "is_parsed": parsed is not None,
+    }
 
 
 async def _multi_start(
@@ -170,7 +240,7 @@ async def _multi_start(
     context: ContextTypes.DEFAULT_TYPE,
     raw: str,
 ) -> int:
-    """Comma-separated /log. Resolve every food, then walk weights."""
+    """Comma-separated /log. Resolve every food, then show the review card."""
     segments = [s for s in (seg.strip() for seg in raw.split(",")) if s]
 
     # A stray trailing comma ("/log eggs,") collapses to a single item.
@@ -186,20 +256,23 @@ async def _multi_start(
     )
 
     parsed = [_split_segment(s) for s in segments]
-    # Resolve every food concurrently — one round of latency, not N.
-    resolved = await asyncio.gather(*(_resolve_one(text) for text, _ in parsed))
+    resolved = await asyncio.gather(
+        *(_resolve_candidates(text) for text, _ in parsed)
+    )
 
     items: list[dict] = []
     unresolved: list[str] = []
-    for (text, weight), food in zip(parsed, resolved):
-        if food is None:
+    for (text, weight), res in zip(parsed, resolved):
+        if res["food"] is None:
             unresolved.append(text)
             continue
         items.append({
-            "food": food,                   # DB row OR unsaved LLM parse
-            "is_parsed": "id" not in food,  # LLM parses have no id yet
-            "weight": weight,               # None if not given inline
-            "label": food.get("name", text),
+            "text": res["text"],
+            "candidates": res["candidates"],
+            "food": res["food"],
+            "is_parsed": res["is_parsed"],
+            "weight": weight,
+            "label": res["food"].get("name", text),
         })
 
     if not items:
@@ -210,14 +283,177 @@ async def _multi_start(
 
     context.user_data[KEY_MULTI_ITEMS] = items
 
-    summary = "Got these:\n" + "\n".join(f"• {it['label']}" for it in items)
     if unresolved:
-        summary += "\n\nCouldn't recognize (skipped):\n" + "\n".join(
-            f"• {u}" for u in unresolved
+        await update.message.reply_text(
+            "Couldn't recognize (skipped):\n"
+            + "\n".join(f"• {u}" for u in unresolved)
         )
-    await update.message.reply_text(summary)
 
-    return await _multi_advance_weight(update, context)
+    return await _multi_show_review(update, context)
+
+
+async def _multi_show_review(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    edit: bool = False,
+) -> int:
+    """Show the editable review card: each item + a 'change' button.
+
+    edit=True edits the existing message in place (after returning from a
+    picker); edit=False sends a fresh message (first entry to the card).
+    """
+    items = context.user_data[KEY_MULTI_ITEMS]
+
+    lines = ["Here's what I'll log — tap any item to change it:", ""]
+    for i, it in enumerate(items, start=1):
+        src = " (AI estimate)" if it["is_parsed"] else ""
+        lines.append(f"{i}. {it['label']}{src}")
+
+    keyboard = [
+        [InlineKeyboardButton(f"Change {i}. {it['label']}", callback_data=f"edit:{i-1}")]
+        for i, it in enumerate(items, start=1)
+    ]
+    keyboard.append([
+        InlineKeyboardButton("Looks right →", callback_data="review_ok"),
+        InlineKeyboardButton("Cancel", callback_data="cancel"),
+    ])
+
+    text = "\n".join(lines)
+    markup = InlineKeyboardMarkup(keyboard)
+
+    if edit:
+        await update.callback_query.edit_message_text(text, reply_markup=markup)
+    else:
+        await update.message.reply_text(text, reply_markup=markup)
+    return MULTI_REVIEW
+
+
+async def multi_review_action(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> int:
+    """Tap on the review card: change an item, accept all, or cancel."""
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data
+    if data == "cancel":
+        await query.edit_message_text("Cancelled.")
+        return ConversationHandler.END
+
+    if data == "review_ok":
+        await query.edit_message_text("Great — now the amounts.")
+        return await _multi_advance_weight(update, context)
+
+    if data.startswith("edit:"):
+        idx = int(data.split(":", 1)[1])
+        context.user_data[KEY_MULTI_IDX] = idx
+        return await _multi_show_picker(update, context, idx)
+
+    return MULTI_REVIEW
+
+
+async def _multi_show_picker(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    idx: int,
+) -> int:
+    """Show alternatives for one item: its DB candidates + 'describe'."""
+    it = context.user_data[KEY_MULTI_ITEMS][idx]
+    candidates = it["candidates"]
+
+    keyboard = [
+        [InlineKeyboardButton(c["name"], callback_data=f"pick:{c['id']}")]
+        for c in candidates
+    ]
+    keyboard.append([InlineKeyboardButton("✏️ Describe it instead", callback_data="describe")])
+    keyboard.append([InlineKeyboardButton("← Back", callback_data="back")])
+
+    if candidates:
+        prompt = f"Other matches for '{it['text']}':"
+    else:
+        prompt = (
+            f"No database matches for '{it['text']}'. "
+            f"Describe it and I'll estimate the macros."
+        )
+
+    await update.callback_query.edit_message_text(
+        prompt, reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    return MULTI_PICK_ITEM
+
+
+async def multi_pick_action(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> int:
+    """Tap in the per-item picker: choose an alternative, describe, or back."""
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data
+    idx = context.user_data[KEY_MULTI_IDX]
+    items = context.user_data[KEY_MULTI_ITEMS]
+
+    if data == "back":
+        return await _multi_show_review(update, context, edit=True)
+
+    if data == "describe":
+        await query.edit_message_text(
+            f"Describe '{items[idx]['text']}' "
+            f"(e.g. 'Greek salad, 120kcal per 100g, 4g protein'):"
+        )
+        return MULTI_DESCRIBE_ITEM
+
+    if data.startswith("pick:"):
+        food_id = int(data.split(":", 1)[1])
+        chosen = next((c for c in items[idx]["candidates"] if c["id"] == food_id), None)
+        if chosen is not None:
+            items[idx]["food"] = chosen
+            items[idx]["is_parsed"] = False
+            items[idx]["label"] = chosen["name"]
+        return await _multi_show_review(update, context, edit=True)
+
+    return MULTI_PICK_ITEM
+
+
+async def multi_describe_received(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> int:
+    """User typed a description to override one item; LLM-parse just that one."""
+    description = update.message.text.strip()
+    if not description:
+        await update.message.reply_text("Need a description. Try again.")
+        return MULTI_DESCRIBE_ITEM
+
+    await context.bot.send_chat_action(
+        chat_id=update.effective_chat.id, action=ChatAction.TYPING
+    )
+
+    try:
+        parsed = await client.parse_food(description)
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 422:
+            await update.message.reply_text(
+                "I couldn't recognize that. Try describing it differently."
+            )
+        else:
+            await update.message.reply_text("Couldn't parse that. Try again.")
+        return MULTI_DESCRIBE_ITEM
+    except Exception:
+        log.exception("multi describe parse failed")
+        await update.message.reply_text("Couldn't parse that. Try again.")
+        return MULTI_DESCRIBE_ITEM
+
+    idx = context.user_data[KEY_MULTI_IDX]
+    it = context.user_data[KEY_MULTI_ITEMS][idx]
+    it["food"] = parsed
+    it["is_parsed"] = True
+    it["label"] = parsed.get("name", it["text"])
+
+    # Back to the review card. We can't edit the user's text message, so send fresh.
+    return await _multi_show_review(update, context)
 
 
 async def _multi_advance_weight(
@@ -255,17 +491,6 @@ async def multi_weight_received(
     return await _multi_advance_weight(update, context)
 
 
-def _scaled(food: dict, weight: float) -> tuple[float, float, float, float]:
-    """Per-100g macros scaled to an actual weight. Returns (kcal, p, f, c)."""
-    factor = weight / 100
-    return (
-        float(food["kcal_100g"]) * factor,
-        float(food["protein_100g"]) * factor,
-        float(food["fat_100g"]) * factor,
-        float(food["carbs_100g"]) * factor,
-    )
-
-
 async def _multi_show_confirm(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -293,7 +518,6 @@ async def _multi_show_confirm(
         InlineKeyboardButton("Confirm all", callback_data="confirm"),
         InlineKeyboardButton("Cancel", callback_data="cancel"),
     ]]
-    # Plain text: labels may contain '_' or '%' that would break Markdown.
     msg = update.message or update.callback_query.message
     await msg.reply_text(
         "\n".join(lines),
@@ -363,7 +587,6 @@ async def photo_entry(
     context: ContextTypes.DEFAULT_TYPE,
 ) -> int:
     """User sent a photo. Decode any barcode and look it up."""
-    # Telegram sends multiple photo sizes; take the highest resolution.
     photo = update.message.photo[-1]
     try:
         file = await photo.get_file()
@@ -410,7 +633,6 @@ async def photo_entry(
         await update.message.reply_text("Couldn't look that up. Try again later.")
         return ConversationHandler.END
 
-    # OFF/DB hit — same shape as a food selected from the keyboard.
     context.user_data[KEY_FOOD] = food
 
     keyboard = [[InlineKeyboardButton("Cancel", callback_data="cancel")]]
@@ -446,7 +668,8 @@ async def description_received(
 
 
 # ======================================================================
-# LLM fallback (shared by single-item text path and barcode-miss path)
+# LLM fallback (shared by single-item text path, barcode-miss path, and
+# the single-item "describe instead" escape button)
 # ======================================================================
 
 async def _parse_via_llm(
@@ -454,6 +677,13 @@ async def _parse_via_llm(
     context: ContextTypes.DEFAULT_TYPE,
     description: str,
 ) -> int:
+    """Parse free text into a food and show Save/Cancel.
+
+    Works whether invoked from a text message (update.message) or a button
+    tap (update.callback_query); it resolves the right message object once.
+    """
+    msg = update.message or update.callback_query.message
+
     await context.bot.send_chat_action(
         chat_id=update.effective_chat.id,
         action=ChatAction.TYPING,
@@ -463,21 +693,20 @@ async def _parse_via_llm(
         parsed = await client.parse_food(description)
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code == 422:
-            await update.message.reply_text(
+            await msg.reply_text(
                 f"I couldn't recognize '{description}'. Try describing it differently."
             )
         else:
             log.warning("parse_food failed: %s", exc)
-            await update.message.reply_text(
+            await msg.reply_text(
                 "Couldn't parse that right now. Try again in a moment."
             )
         return ConversationHandler.END
     except Exception:
         log.exception("parse_food unexpected error")
-        await update.message.reply_text("Couldn't parse that. Try again later.")
+        await msg.reply_text("Couldn't parse that. Try again later.")
         return ConversationHandler.END
 
-    # If we arrived via a barcode miss, attach the barcode for the save step.
     if barcode := context.user_data.pop("pending_barcode", None):
         parsed["barcode"] = barcode
 
@@ -487,7 +716,7 @@ async def _parse_via_llm(
     if parsed.get("brand"):
         title += f" — {parsed['brand']}"
 
-    msg = (
+    body = (
         f"{title}\n"
         f"Per 100g:\n"
         f"  {parsed['kcal_100g']:.0f} kcal\n"
@@ -501,8 +730,8 @@ async def _parse_via_llm(
         InlineKeyboardButton("Cancel", callback_data="cancel"),
     ]]
 
-    await update.message.reply_text(
-        msg,
+    await msg.reply_text(
+        body,
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="Markdown",
     )
@@ -559,6 +788,19 @@ async def food_chosen(
     if query.data == "cancel":
         await query.edit_message_text("Cancelled.")
         return ConversationHandler.END
+
+    if query.data == "describe_single":
+        # User rejected all DB matches — re-run the original query through the
+        # LLM as a description.
+        original = context.user_data.get(KEY_SINGLE_QUERY, "")
+        await query.edit_message_text("OK — describing it instead.")
+        if not original:
+            await query.message.reply_text(
+                "Send the description, e.g. `/log <food>, 150kcal per 100g, 10g protein`.",
+                parse_mode="Markdown",
+            )
+            return ConversationHandler.END
+        return await _parse_via_llm(update, context, original)
 
     food_id = int(query.data.split(":", 1)[1])
     food = context.user_data[KEY_FOODS].get(food_id)
@@ -653,6 +895,17 @@ async def confirm(
 # Shared helpers
 # ======================================================================
 
+def _scaled(food: dict, weight: float) -> tuple[float, float, float, float]:
+    """Per-100g macros scaled to an actual weight. Returns (kcal, p, f, c)."""
+    factor = weight / 100
+    return (
+        float(food["kcal_100g"]) * factor,
+        float(food["protein_100g"]) * factor,
+        float(food["fat_100g"]) * factor,
+        float(food["carbs_100g"]) * factor,
+    )
+
+
 async def _resolve_user_id(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -708,6 +961,11 @@ def build_log_handler() -> ConversationHandler:
             AWAITING_DESCRIPTION: [
                 CallbackQueryHandler(cancel_via_button),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, description_received),
+            ],
+            MULTI_REVIEW: [CallbackQueryHandler(multi_review_action)],
+            MULTI_PICK_ITEM: [CallbackQueryHandler(multi_pick_action)],
+            MULTI_DESCRIBE_ITEM: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, multi_describe_received),
             ],
             MULTI_WEIGHT_WALK: [
                 CallbackQueryHandler(cancel_via_button),
