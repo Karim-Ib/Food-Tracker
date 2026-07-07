@@ -7,6 +7,7 @@ from bot.config import settings
 from bot.handlers.start import start_command
 from bot.handlers.whoami import whoami_command
 from bot.handlers.log import build_log_handler
+from bot.handlers.logmeal import build_logmeal_handler
 from bot.handlers.today import today_command
 from bot.handlers.weight import weight_command
 from bot.handlers.status import status_command, week_command
@@ -22,6 +23,7 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 
 COMMANDS = [
     BotCommand("log", "Log a meal (text, or send a barcode photo)"),
+    BotCommand("logmeal", "Log a full meal by description (AI estimate)"),
     BotCommand("today", "Today's meals and totals"),
     BotCommand("status", "Today's macros vs goals"),
     BotCommand("week", "This week so far"),
@@ -52,6 +54,7 @@ def main() -> None:
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("whoami", whoami_command))
     app.add_handler(build_log_handler())
+    app.add_handler(build_logmeal_handler())
     app.add_handler(CommandHandler("today", today_command))
     app.add_handler(CommandHandler("weight", weight_command))
     app.add_handler(CommandHandler("status", status_command))

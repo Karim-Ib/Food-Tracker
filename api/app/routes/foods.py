@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.schemas.parse import FoodParseRequest, ParsedFood
+from app.schemas.parse import FoodParseRequest, ParsedFood, ParsedMeal
 from app.services.llm_parser import FoodParseError, parser
 
 from app.db.models import Food
@@ -46,6 +46,23 @@ async def parse_food(data: FoodParseRequest) -> ParsedFood:
     """
     try:
         return await parser.parse_food(data.description)
+    except FoodParseError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+@router.post(
+    "/parse-meal",
+    response_model=ParsedMeal,
+    responses={422: {"description": "Could not estimate meal description"}},
+)
+async def parse_meal(data: FoodParseRequest) -> ParsedMeal:
+    """Estimate a full free-text meal into per-100g macros + a portion size.
+
+    Stateless — like /parse it does not write to the foods table. The returned
+    macros are already buffered (fat/carbs nudged up, kcal recomputed via 9/4/4)
+    server-side; the caller reviews with the user and then POSTs to /foods.
+    """
+    try:
+        return await parser.parse_meal(data.description)
     except FoodParseError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 

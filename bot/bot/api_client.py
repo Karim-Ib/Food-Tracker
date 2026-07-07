@@ -85,6 +85,16 @@ class APIClient:
         response.raise_for_status()
         return response.json()
 
+    async def parse_meal(self, description: str) -> dict:
+        """Call /foods/parse-meal to estimate a full meal (per-100g + portion)."""
+        response = await self._client.post(
+            "/foods/parse-meal",
+            json={"description": description},
+            timeout=httpx.Timeout(60.0, connect=5.0),
+        )
+        response.raise_for_status()
+        return response.json()
+
     async def create_food_from_parse(
             self,
             parsed: dict,

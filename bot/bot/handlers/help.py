@@ -8,6 +8,7 @@ HELP_TEXT = """\
 *Logging*
 /log <food> — search, pick, set grams, confirm
 /log <description> — free-text; AI estimates macros if no DB match
+/logmeal <description> — estimate a whole meal in one shot (great for takeout)
 photo — send a barcode photo to look up a packaged product
 
 *Today*
