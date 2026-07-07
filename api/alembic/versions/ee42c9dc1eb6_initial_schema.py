@@ -65,7 +65,7 @@ def upgrade() -> None:
     sa.Column('fiber_100g', sa.Numeric(precision=6, scale=2), nullable=True),
     sa.Column('sugar_100g', sa.Numeric(precision=6, scale=2), nullable=True),
     sa.Column('sat_fat_100g', sa.Numeric(precision=6, scale=2), nullable=True),
-    sa.Column('source', sa.Enum('oystem', 'openFoodFacts', 'user', 'ai_estimated', name='food_source', schema='app'), nullable=False),
+    sa.Column('source', sa.Enum('system', 'openFoodFacts', 'user', 'ai_estimated', name='food_source', schema='app'), nullable=False),
     sa.Column('visibility', sa.Enum('public', 'private', name='visibility', schema='app'), server_default=sa.text("'private'"), nullable=False),
     sa.Column('created_by_user_id', sa.BigInteger(), nullable=True),
     sa.Column('openfoodfacts_id', sa.Text(), nullable=True),
