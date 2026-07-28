@@ -51,6 +51,10 @@ class TargetCrossing(BaseModel):
     already_passed: bool = Field(
         ..., description="True if the fit crossed this weight before the last weigh-in."
     )
+    is_goal: bool = Field(
+        default=False,
+        description="True for the user's goal weight; the rest are waypoints to it.",
+    )
 
 
 class WeightModelSummary(BaseModel):
@@ -60,6 +64,13 @@ class WeightModelSummary(BaseModel):
     projection: list[TargetCrossing]
     horizon_days: int
     seed_count: int = Field(..., description="Flagged rows excluded from the fit.")
+    goal_weight_kg: Optional[float] = Field(
+        None,
+        description=(
+            "The user's target weight. Null means no goal is set, in which case "
+            "the chart carries no target lines and `projection` is empty."
+        ),
+    )
     projection_disclaimer: str = Field(
         default=(
             "Constant-rate counterfactual, not a forecast. Real loss "

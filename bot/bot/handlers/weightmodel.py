@@ -1,7 +1,13 @@
 """/weight_model — OLS weight trend chart, optionally projected N months out.
 
-    /weight_model      -> fit over every logged weight, default 152-day projection
-    /weight_model 6    -> same, projection extended to ~6 months
+    /weight_model            -> fit over every logged weight, default projection
+    /weight_model 6          -> same, projection extended to ~6 months
+    /weight_model goal 86    -> set the target weight, then chart
+    /weight_model 6 goal 86  -> both, in either order
+
+The goal persists on the user, so later bare calls reuse it. Target lines on the
+chart are generated between the goal and the highest measured weight, so the
+chart centres itself on whatever range that user actually occupies.
 
 The chart is rendered server-side and arrives as a PNG; the caption carries the
 fit, the 14-day step-down trigger, and the crossing dates.
@@ -30,6 +36,15 @@ DEFAULT_HORIZON_DAYS = 152
 _MEAN_MONTH_DAYS = 30.44
 _MAX_MONTHS = 36  # the API caps horizon_days at 1096
 
+_USAGE = (
+    "Usage:\n"
+    "  /weight_model — chart with your current goal\n"
+    "  /weight_model <months> — project that far out\n"
+    "  /weight_model goal <kg> — set your target weight\n"
+    "  /weight_model <months> goal <kg> — both\n\n"
+    f"e.g. /weight_model 6 goal 86  (max {_MAX_MONTHS} months)"
+)
+
 
 async def weight_model_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     tg_id = update.effective_user.id
@@ -46,13 +61,21 @@ async def weight_model_command(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text("Your account is awaiting admin approval.")
         return
 
-    horizon_days = _parse_horizon(context.args)
-    if horizon_days is None:
-        await update.message.reply_text(
-            "Usage: /weight_model  or  /weight_model <months>\n"
-            f"e.g. /weight_model 6 — project 6 months out (max {_MAX_MONTHS})."
-        )
+    parsed = _parse_args(context.args)
+    if parsed is None:
+        await update.message.reply_text(_USAGE)
         return
+    horizon_days, goal_kg = parsed
+
+    # Persist the goal before rendering, so the chart and the summary both read
+    # it from the same place rather than the bot passing it around.
+    if goal_kg is not None:
+        try:
+            await client.update_goal(user["id"], "goal_weight_kg", goal_kg)
+        except Exception:
+            log.exception("saving weight goal failed")
+            await update.message.reply_text("Couldn't save that goal. Try again.")
+            return
 
     await context.bot.send_chat_action(
         chat_id=update.effective_chat.id, action=ChatAction.UPLOAD_PHOTO
@@ -81,19 +104,46 @@ async def weight_model_command(update: Update, context: ContextTypes.DEFAULT_TYP
     await update.message.reply_photo(photo=png, caption=_caption(summary))
 
 
-def _parse_horizon(args: list[str]) -> int | None:
-    """Args -> projection horizon in days. None means the input was unusable."""
-    if not args:
-        return DEFAULT_HORIZON_DAYS
+def _parse_args(args: list[str]) -> tuple[int, float | None] | None:
+    """Args -> (horizon_days, goal_kg). None means the input was unusable.
 
-    try:
-        months = float(args[0].replace(",", "."))
-    except ValueError:
-        return None
-    if months < 0 or months > _MAX_MONTHS:
-        return None
+    Both options are optional and order-independent: a bare number is months,
+    and `goal` consumes the token after it. A goal of None means "leave whatever
+    is stored alone" — not "clear it".
+    """
+    months: float | None = None
+    goal: float | None = None
 
-    return round(months * _MEAN_MONTH_DAYS)
+    i = 0
+    while i < len(args):
+        token = args[i].lower()
+
+        if token == "goal":
+            if goal is not None or i + 1 >= len(args):
+                return None
+            try:
+                goal = float(args[i + 1].replace(",", "."))
+            except ValueError:
+                return None
+            if not 0 < goal <= 500:
+                return None
+            i += 2
+            continue
+
+        if months is not None:
+            return None
+        try:
+            months = float(token.replace(",", "."))
+        except ValueError:
+            return None
+        if months < 0 or months > _MAX_MONTHS:
+            return None
+        i += 1
+
+    horizon = (
+        DEFAULT_HORIZON_DAYS if months is None else round(months * _MEAN_MONTH_DAYS)
+    )
+    return horizon, goal
 
 
 def _caption(summary: dict) -> str:
@@ -118,6 +168,11 @@ def _caption(summary: dict) -> str:
             f"— {trigger['reason']}."
         )
 
+    if summary.get("goal_weight_kg") is None:
+        lines.append("")
+        lines.append("No goal weight set — /weight_model goal 86 to add target lines.")
+        return "\n".join(lines)
+
     upcoming = [
         c for c in summary["projection"]
         if not c["already_passed"] and c["within_horizon"]
@@ -128,7 +183,8 @@ def _caption(summary: dict) -> str:
         lines.append("At this exact rate (upper bound — you'd hit these no sooner):")
         for c in upcoming:
             when = date.fromisoformat(c["crossing_date"]).strftime("%d %b %Y")
-            lines.append(f"  {c['target_kg']:.0f} kg — {when}")
+            marker = "  ← goal" if c["is_goal"] else ""
+            lines.append(f"  {c['target_kg']:g} kg — {when}{marker}")
 
     lines.append("")
     lines.append(summary["projection_disclaimer"])

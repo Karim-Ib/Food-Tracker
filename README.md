@@ -62,6 +62,7 @@ On the read side you can see today's entries and totals, today's macros against 
 | `/weight` | Show recent weight entries. |
 | `/weight_model` | Weight-trend chart: OLS fit, ±1σ band, slope CI, step-down trigger. |
 | `/weight_model <months>` | Same, with the projection extended N months out. |
+| `/weight_model goal <kg>` | Set your target weight; target lines rescale to it. Persists. |
 | `/goal` | Show current daily targets. |
 | `/goal <field> <value>` | Set one target (`kcal`, `protein`, `fat`, `carbs`). |
 | `/help` | Full command reference. |
@@ -175,6 +176,7 @@ users
   is_active, is_admin,
   daily_kcal_target, daily_protein_target_g,
   daily_fat_target_g, daily_carbs_target_g,
+  goal_weight_kg,
   created_at, updated_at
 
 foods
@@ -267,6 +269,28 @@ The LLM is treated as an **untrusted parser, not an oracle**: its output is cons
 weigh-in and renders it as a chart: the observed points, the fit, a ±1σ
 residual band, a slope-CI cone, a dashed projection, target lines with crossing
 dates, and a residual panel beneath.
+
+### Target lines scale to the user
+
+The reference figure shipped with a hardcoded 100/95/90/86 ladder, which only
+reads correctly for someone starting near 105 kg. Targets are now generated from
+two numbers the user owns — their goal (`users.goal_weight_kg`, set with
+`/weight_model goal 86`) and their highest measured weight — so the band, and
+therefore the chart's vertical framing, centres on whatever range that person
+actually occupies. Change the goal and the chart re-centres.
+
+`build_targets()` picks a step off a round-number ladder (0.5, 1, 2, 2.5, 5, 10,
+20, 25, 50) — the smallest one that keeps the line count at five or under — so
+the step grows with the span instead of the lines multiplying into clutter. The
+goal line always appears and keeps its exact value; intermediate lines snap to
+the grid so they read as 90/95/100 rather than 88.4/93.4/98.4, and any grid line
+close enough to crowd the goal's label is dropped. It works in both directions:
+a goal above current weight produces the same ladder running upward.
+
+No goal set means no target lines and no crossing dates — the fit, the band, and
+the trigger still render, and the caption says how to set one. On the original
+reference series a goal of 86 reproduces the old hardcoded ladder, which is
+pinned by a test.
 
 The statistics live in `api/app/services/weight_model.py`, which imports nothing
 but numpy — no FastAPI, no SQLAlchemy, no config. That is deliberate: it is the

@@ -71,6 +71,9 @@ class User(Base):
     daily_protein_target_g: Mapped[Optional[Decimal]] = mapped_column(Numeric(6, 1))
     daily_fat_target_g: Mapped[Optional[Decimal]] = mapped_column(Numeric(6, 1))
     daily_carbs_target_g: Mapped[Optional[Decimal]] = mapped_column(Numeric(6, 1))
+    # Target body weight. Unlike the daily macro targets this is an endpoint, not
+    # a per-day quota — it anchors the target lines on the /weight_model chart.
+    goal_weight_kg: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2))
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

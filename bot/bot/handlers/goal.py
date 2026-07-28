@@ -13,12 +13,17 @@ def _format_current(targets: dict) -> str:
     def show(key: str, unit: str) -> str:
         v = targets.get(key)
         return f"{Decimal(v):.0f} {unit}" if v is not None else f"— {unit}"
+    # Weight is shown but not settable here — it's an endpoint, not a daily
+    # quota, and /weight_model owns it so there's one place that sets it.
+    weight = targets.get("goal_weight_kg")
+    weight_line = f"{Decimal(weight):.1f} kg" if weight is not None else "— (/weight_model goal 86)"
     return (
         "Current goals:\n"
         f"  kcal:    {show('daily_kcal_target', 'kcal')}\n"
         f"  protein: {show('daily_protein_target_g', 'g')}\n"
         f"  fat:     {show('daily_fat_target_g', 'g')}\n"
-        f"  carbs:   {show('daily_carbs_target_g', 'g')}"
+        f"  carbs:   {show('daily_carbs_target_g', 'g')}\n"
+        f"  weight:  {weight_line}"
     )
 
 

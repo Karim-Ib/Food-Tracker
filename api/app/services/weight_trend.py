@@ -6,6 +6,7 @@ users, or timezones lives here.
 """
 import asyncio
 import logging
+import math
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,11 +26,7 @@ from app.services.weight_model import (
     projection,
     trigger_state,
 )
-from app.services.weight_plot import (
-    _DEFAULT_TARGETS,
-    figure_to_png_bytes,
-    render_trend_figure,
-)
+from app.services.weight_plot import figure_to_png_bytes, render_trend_figure
 
 log = logging.getLogger(__name__)
 
@@ -47,8 +44,63 @@ TRIGGER_WINDOW_DAYS = 14
 _render_lock = asyncio.Lock()
 
 
+# Nice round increments for the target lines, smallest first. The chart gets at
+# most _MAX_TARGET_LINES of them, so as the span grows the step grows with it
+# rather than the lines multiplying into clutter.
+_STEP_LADDER = (0.5, 1.0, 2.0, 2.5, 5.0, 10.0, 20.0, 25.0, 50.0)
+_MAX_TARGET_LINES = 5
+
+
 class InsufficientWeightData(Exception):
     """Raised when there aren't enough measured weigh-ins to fit a trend."""
+
+
+def build_targets(
+    max_weight: float,
+    goal: float | None,
+) -> list[tuple[float, str]]:
+    """Target lines spanning the goal to the highest measured weight.
+
+    Replaces the reference figure's hardcoded 100/95/90/86 set, which only made
+    sense from one particular starting weight. The band is anchored at both ends
+    by the user's own data — highest measured weight and their goal — so the
+    chart centres itself for anyone, and re-centres when the goal changes.
+
+    The goal line is always present and keeps its exact value. Intermediate
+    lines snap to a round grid so they read as 90/95/100 rather than
+    88.4/93.4/98.4, and any grid line close enough to crowd the goal's label is
+    dropped. Works in either direction: a goal above the current weight (gaining)
+    produces the same ladder running upward.
+    """
+    if goal is None:
+        return []
+
+    goal = float(goal)
+    lo, hi = min(goal, max_weight), max(goal, max_weight)
+    goal_label = f"{goal:g} kg · goal"
+
+    span = hi - lo
+    if span <= 0:
+        # Already at (or past) the goal — the goal line alone is the whole story.
+        return [(goal, goal_label)]
+
+    step = next(
+        (s for s in _STEP_LADDER if span / s <= _MAX_TARGET_LINES),
+        _STEP_LADDER[-1],
+    )
+
+    targets = [(goal, goal_label)]
+    first = math.floor(lo / step) * step + step
+    for i in range(_MAX_TARGET_LINES + 1):
+        # Indexed off `first` rather than accumulated, so repeated addition
+        # can't drift a 105.0 line into 104.99999.
+        kg = first + i * step
+        if kg >= hi:
+            break
+        if abs(kg - goal) >= step / 2:
+            targets.append((kg, f"{kg:g} kg"))
+
+    return sorted(targets, key=lambda t: -t[0])
 
 
 def _safe_projection(fit, targets: list[float], horizon_days: float) -> dict:
@@ -112,7 +164,7 @@ class WeightTrendService:
         user_id: int,
         horizon_days: int = DEFAULT_HORIZON_DAYS,
     ) -> WeightModelSummary:
-        data, _ = await self._load(user_id)
+        data, user = await self._load(user_id)
 
         try:
             fit = fit_trend(data)
@@ -124,7 +176,8 @@ class WeightTrendService:
         measured = [w for w in data if not w.is_seed]
         last_day = (measured[-1].ts - fit.t0).total_seconds() / 86400.0
 
-        targets = [kg for kg, _label in _DEFAULT_TARGETS]
+        goal = float(user.goal_weight_kg) if user.goal_weight_kg is not None else None
+        targets = [kg for kg, _label in build_targets(_max_measured(data), goal)]
         # projection() counts its horizon from t0, but the chart draws the dashed
         # line to last_day + horizon_days. Passing the chart's endpoint keeps
         # within_horizon meaning "a marker exists for this on the image" — without
@@ -159,11 +212,13 @@ class WeightTrendService:
                     days_from_start=info["days_from_t0"],
                     within_horizon=info["within_horizon"],
                     already_passed=info["days_from_t0"] <= last_day,
+                    is_goal=goal is not None and abs(float(kg) - goal) < 1e-9,
                 )
                 for kg, info in crossings.items()
             ],
             horizon_days=horizon_days,
             seed_count=sum(1 for w in data if w.is_seed),
+            goal_weight_kg=goal,
         )
 
     async def chart_png(
@@ -171,10 +226,15 @@ class WeightTrendService:
         user_id: int,
         horizon_days: int = DEFAULT_HORIZON_DAYS,
     ) -> bytes:
-        data, _ = await self._load(user_id)
+        data, user = await self._load(user_id)
+
+        goal = float(user.goal_weight_kg) if user.goal_weight_kg is not None else None
+        targets = build_targets(_max_measured(data), goal)
 
         def _render() -> bytes:
-            fig, _fit = render_trend_figure(data, horizon_days=horizon_days)
+            fig, _fit = render_trend_figure(
+                data, targets=targets, horizon_days=horizon_days
+            )
             return figure_to_png_bytes(fig)
 
         async with _render_lock:
@@ -182,6 +242,11 @@ class WeightTrendService:
                 return await asyncio.to_thread(_render)
             except ValueError as exc:
                 raise InsufficientWeightData(str(exc)) from exc
+
+
+def _max_measured(data: list[WeighIn]) -> float:
+    """Highest measured weight. Seeds are excluded, as they are from every fit."""
+    return max(w.kg for w in data if not w.is_seed)
 
 
 def months_to_days(months: float) -> int:

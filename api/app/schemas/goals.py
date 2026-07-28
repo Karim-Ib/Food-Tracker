@@ -10,6 +10,9 @@ class GoalUpdate(BaseModel):
     daily_protein_target_g: Optional[Decimal] = Field(default=None, ge=0, le=2000)
     daily_fat_target_g: Optional[Decimal] = Field(default=None, ge=0, le=2000)
     daily_carbs_target_g: Optional[Decimal] = Field(default=None, ge=0, le=2000)
+    # Bounded like body_metrics.weight_kg so a fat-fingered goal is rejected at
+    # the boundary rather than producing an absurd chart.
+    goal_weight_kg: Optional[Decimal] = Field(default=None, gt=0, le=500)
 
 
 class GoalRead(BaseModel):
@@ -19,3 +22,4 @@ class GoalRead(BaseModel):
     daily_protein_target_g: Optional[Decimal] = None
     daily_fat_target_g: Optional[Decimal] = None
     daily_carbs_target_g: Optional[Decimal] = None
+    goal_weight_kg: Optional[Decimal] = None
