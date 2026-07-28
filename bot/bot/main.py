@@ -10,6 +10,7 @@ from bot.handlers.log import build_log_handler
 from bot.handlers.logmeal import build_logmeal_handler
 from bot.handlers.today import today_command
 from bot.handlers.weight import weight_command
+from bot.handlers.weightmodel import weight_model_command
 from bot.handlers.status import status_command, week_command
 from bot.handlers.goal import goal_command
 from bot.handlers.help import help_command
@@ -28,6 +29,7 @@ COMMANDS = [
     BotCommand("status", "Today's macros vs goals"),
     BotCommand("week", "This week so far"),
     BotCommand("weight", "Log or view body weight"),
+    BotCommand("weight_model", "Weight trend chart (optionally: months ahead)"),
     BotCommand("goal", "Set or view daily targets"),
     BotCommand("whoami", "Your profile"),
     BotCommand("help", "Show all commands"),
@@ -57,6 +59,7 @@ def main() -> None:
     app.add_handler(build_logmeal_handler())
     app.add_handler(CommandHandler("today", today_command))
     app.add_handler(CommandHandler("weight", weight_command))
+    app.add_handler(CommandHandler("weight_model", weight_model_command))
     app.add_handler(CommandHandler("status", status_command))
     app.add_handler(CommandHandler("week", week_command))
     app.add_handler(CommandHandler("goal", goal_command))

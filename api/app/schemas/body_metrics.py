@@ -10,6 +10,10 @@ class BodyMetricBase(BaseModel):
     weight_kg: Optional[Decimal] = Field(default=None, gt=0, le=500)
     body_fat_pct: Optional[Decimal] = Field(default=None, ge=0, le=70)
     notes: Optional[str] = None
+    is_seed: bool = Field(
+        default=False,
+        description="Remembered/estimated, not measured — excluded from trend fits.",
+    )
 
 
 class BodyMetricCreate(BodyMetricBase):

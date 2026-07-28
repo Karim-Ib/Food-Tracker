@@ -132,6 +132,7 @@ class APIClient:
             weight_kg: float | None = None,
             body_fat_pct: float | None = None,
             notes: str | None = None,
+            is_seed: bool = False,
     ) -> dict:
         response = await self._client.post(
             "/body-metrics",
@@ -140,10 +141,30 @@ class APIClient:
                 "weight_kg": weight_kg,
                 "body_fat_pct": body_fat_pct,
                 "notes": notes,
+                "is_seed": is_seed,
             },
         )
         response.raise_for_status()
         return response.json()
+
+    async def get_weight_model(self, user_id: int, horizon_days: int) -> dict:
+        """Fit summary, trigger state, and target crossings for the weight trend."""
+        response = await self._client.get(
+            "/body-metrics/weight-model",
+            params={"user_id": user_id, "horizon_days": horizon_days},
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def get_weight_model_chart(self, user_id: int, horizon_days: int) -> bytes:
+        """The rendered trend chart as PNG bytes. Raises HTTPStatusError on 4xx."""
+        response = await self._client.get(
+            "/body-metrics/weight-model/chart.png",
+            params={"user_id": user_id, "horizon_days": horizon_days},
+            timeout=httpx.Timeout(60.0, connect=5.0),
+        )
+        response.raise_for_status()
+        return response.content
 
     async def get_recent_body_metrics(self, user_id: int, limit: int = 10) -> list[dict]:
         response = await self._client.get(

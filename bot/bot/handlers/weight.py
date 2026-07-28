@@ -45,23 +45,38 @@ async def weight_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text("Weight must be between 0 and 500 kg.")
         return
 
-    notes = " ".join(context.args[1:]) or None
+    # A leading `seed` in the note marks the row as remembered rather than
+    # measured; it is stripped so it doesn't end up in the note text. Seeds are
+    # excluded from every trend fit — see /weight_model.
+    rest = context.args[1:]
+    is_seed = bool(rest) and rest[0].lower() == "seed"
+    if is_seed:
+        rest = rest[1:]
+
+    notes = " ".join(rest) or None
 
     try:
         await client.create_body_metric(
             user_id=user["id"],
             weight_kg=float(weight),
             notes=notes,
+            is_seed=is_seed,
         )
     except Exception:
         await update.message.reply_text("Couldn't save. Try again in a moment.")
+        return
+
+    if is_seed:
+        await update.message.reply_text(
+            f"Logged {weight} kg as a seed — shown on the chart, excluded from the trend."
+        )
         return
 
     await update.message.reply_text(f"Logged {weight} kg.")
 
 
 async def _show_recent(update: Update, user: dict) -> None:
-    entries = await client.get_recent_body_metrics(user["id"], limit=10)
+    entries = await client.get_recent_body_metrics(user["id"], limit=14)
     if not entries:
         await update.message.reply_text("No weight entries yet. Try `/weight 80.5`.", parse_mode="Markdown")
         return

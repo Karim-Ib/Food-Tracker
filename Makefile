@@ -1,4 +1,4 @@
-.PHONY: up down reset logs ps psql up-prod logs-prod bootstrap verify
+.PHONY: up down reset logs ps psql up-prod logs-prod bootstrap verify test migrate
 
 # ---------------- Local dev (auto-loads docker-compose.override.yml) ----------------
 
@@ -56,3 +56,15 @@ restart-bot:
 
 restart-api:
 	docker compose restart api
+
+# ---------------- Schema and tests ----------------
+
+# Applied as app_user (not the superuser) so default-privilege grants take effect.
+migrate:
+	docker compose exec api alembic upgrade head
+
+# Runs on the host venv, not in a container: the weight-model tests are pure
+# numpy — no database, no event loop — so there is nothing to containerize.
+# Needs the dev extra once: pip install -e ".[dev]"
+test:
+	python -m pytest -q

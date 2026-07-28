@@ -247,6 +247,12 @@ class BodyMetric(Base):
     weight_kg: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2))
     body_fat_pct: Mapped[Optional[Decimal]] = mapped_column(Numeric(4, 2))
     notes: Mapped[Optional[str]] = mapped_column(Text)
+    # Remembered / estimated rather than stepped on a scale. Excluded from every
+    # trend fit — the flag is the ONLY exclusion mechanism (never by date or value),
+    # because a single unmeasured anchor point visibly drags the slope.
+    is_seed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

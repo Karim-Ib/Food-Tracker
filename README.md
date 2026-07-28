@@ -14,6 +14,7 @@ The project is deliberately dual-purpose: a tool that is genuinely useful day to
 - [Data flow](#data-flow)
 - [Data model](#data-model)
 - [The tiered food lookup](#the-tiered-food-lookup)
+- [The weight-trend model](#the-weight-trend-model)
 - [Layered code structure](#layered-code-structure)
 - [Key design decisions](#key-design-decisions)
 - [Repository layout](#repository-layout)
@@ -55,8 +56,12 @@ On the read side you can see today's entries and totals, today's macros against 
 | `/today` | Today's logged meals and macro totals. |
 | `/status` | Today's macros against your daily targets. |
 | `/week` | This calendar week so far (Monday through today). |
+| `/logmeal <description>` | Estimate a whole meal in one shot (takeout/restaurant food). |
 | `/weight <kg>` | Log body weight, e.g. `/weight 80.5`. |
+| `/weight <kg> seed` | Log a remembered (not measured) weight; excluded from trend fits. |
 | `/weight` | Show recent weight entries. |
+| `/weight_model` | Weight-trend chart: OLS fit, ±1σ band, slope CI, step-down trigger. |
+| `/weight_model <months>` | Same, with the projection extended N months out. |
 | `/goal` | Show current daily targets. |
 | `/goal <field> <value>` | Set one target (`kcal`, `protein`, `fat`, `carbs`). |
 | `/help` | Full command reference. |
@@ -197,8 +202,14 @@ meal_entries
 
 body_metrics
   id, user_id → users.id, recorded_at,
-  weight_kg, body_fat_pct, notes, created_at
+  weight_kg, body_fat_pct, notes, is_seed, created_at
 ```
+
+`body_metrics.is_seed` marks a weight that was remembered or estimated rather
+than stepped on a scale. It is the **only** mechanism that excludes a point from
+a trend fit — never a date cutoff, never a value threshold — because a single
+unmeasured anchor visibly drags the slope (−0.72 kg/wk instead of −0.82 on the
+reference series). The flag is persistent, so the fit is reproducible.
 
 Integrity is enforced **in the database**, not only in application code:
 
@@ -247,6 +258,53 @@ Resolving "what is this food and what are its macros" runs through three tiers, 
 The crucial property is **cache-warming**: every successful resolution at tier 2 or 3 is written back as a local food row. After a month of real use, your common groceries all live in tier 1 and the network/LLM call rate approaches zero. OpenFoodFacts hits are saved as public foods (everyone benefits); LLM estimates are saved private to the user and tagged `ai_estimated` so they remain auditable.
 
 The LLM is treated as an **untrusted parser, not an oracle**: its output is constrained by a JSON schema derived from a Pydantic model, validated on receipt, retried once with the validation error fed back into the prompt, and always confirmed by the user before anything is persisted. OpenFoodFacts data — which is community-contributed and varies in quality — is similarly never trusted blindly: products missing any required macro are rejected as a clean miss rather than saved with misleading zeros.
+
+---
+
+## The weight-trend model
+
+`/weight_model` fits an ordinary least-squares line through every measured
+weigh-in and renders it as a chart: the observed points, the fit, a ±1σ
+residual band, a slope-CI cone, a dashed projection, target lines with crossing
+dates, and a residual panel beneath.
+
+The statistics live in `api/app/services/weight_model.py`, which imports nothing
+but numpy — no FastAPI, no SQLAlchemy, no config. That is deliberate: it is the
+one module in the project that is pure computation, so it can be tested against
+known-good numbers without a database or an event loop. `api/tests/test_weight_model.py`
+pins it to a reference series (slope −0.822 kg/wk, SE 0.063, r² 0.890, n=23) and
+to four crossing dates. If those move, the change is wrong, not the test.
+
+Everything that knows about the database lives in `services/weight_trend.py` —
+the entire integration surface is one function mapping `body_metrics` rows to
+`WeighIn` objects. Timestamps are converted to the user's local wall-clock and
+stripped of tzinfo before fitting, for the same reason `/week` buckets on local
+dates: a 00:30 Vienna weigh-in is the previous day in UTC, and both the day-index
+arithmetic and the chart's date labels would file it under the wrong date.
+
+Three framing rules are structural, not stylistic:
+
+- **The projection is a counterfactual, not a forecast.** It answers "where does
+  today's rate lead if nothing changes" — and something always changes, because
+  real loss decelerates as maintenance falls with mass. True dates land *later*.
+  The API ships a `projection_disclaimer` string with every response and the bot
+  prints it under every chart; the chart's own legend labels the dashed line
+  "upper bound". Do not let a caption rewrite drop this.
+- **The CI cone is parameter uncertainty, not a prediction interval.** It is how
+  precisely the slope is known, not where tomorrow's weigh-in will fall.
+- **Exclusion is by flag only.** See `is_seed` above.
+
+The trigger is rate-based: it fires when the trailing 14-day slope goes
+*shallower* than −0.30 kg/wk, i.e. loss has stalled and a calorie step-down is
+due. A window needs ≥3 points to report at all, so one heavy-dinner morning
+barely moves it — which is the point.
+
+The chart is rendered server-side (matplotlib, Agg) and returned as a PNG from
+`GET /body-metrics/weight-model/chart.png`, keeping the bot a thin client and
+letting a future dashboard pull the same image from the same place. Renders run
+in a worker thread behind a lock: matplotlib's pyplot carries global figure
+state and isn't thread-safe, and a ~1s blocking render on the event loop would
+stall every other request.
 
 ---
 
@@ -320,11 +378,15 @@ Two recurring patterns worth naming explicitly, because they show up across many
 │   │   ├── repositories/         data access (queries, no commits)
 │   │   ├── services/             business logic + transaction control
 │   │   │   ├── llm_parser.py     Gemini structured-output parser
-│   │   │   └── openfoodfacts.py  OFF client with defensive parsing
+│   │   │   ├── openfoodfacts.py  OFF client with defensive parsing
+│   │   │   ├── weight_model.py   OLS trend stats (numpy only, no framework)
+│   │   │   ├── weight_plot.py    matplotlib figure — the visual spec
+│   │   │   └── weight_trend.py   DB adapter: body_metrics rows -> WeighIn
 │   │   ├── routes/               HTTP endpoints
 │   │   └── scripts/seed_foods.py idempotent pantry-staples seeder
 │   ├── alembic/                  migrations (env.py, versions/)
 │   ├── alembic.ini
+│   ├── tests/                    pytest — weight-model reference check
 │   └── Dockerfile
 ├── bot/                          Telegram bot service
 │   └── bot/
@@ -334,9 +396,9 @@ Two recurring patterns worth naming explicitly, because they show up across many
 │       ├── api_client.py         httpx wrapper, one method per endpoint
 │       ├── barcode.py            pyzbar decode from photo bytes
 │       └── handlers/             one module per command/flow
-│           ├── start.py  whoami.py  log.py
+│           ├── start.py  whoami.py  log.py  logmeal.py
 │           ├── today.py  weight.py  status.py
-│           ├── goal.py   help.py
+│           ├── weightmodel.py  goal.py  help.py
 │   └── Dockerfile                installs libzbar0 for pyzbar
 ├── infra/
 │   └── postgres/init/            runs once on first DB boot
@@ -406,7 +468,13 @@ make psql          # open a psql shell as the superuser
 make restart-api   # restart just the API (escape hatch for flaky reload)
 make restart-bot   # restart just the bot
 make reset         # nuclear: down + drop the Postgres volume (fresh DB)
+make migrate       # alembic upgrade head (inside the api container, as app_user)
+make test          # pytest on the host venv (weight-model reference check)
 ```
+
+`make test` runs on the host rather than in a container — the weight-model tests
+are pure numpy, with no database and no event loop, so there is nothing to
+containerize. It needs the dev extra once: `pip install -e ".[dev]"`.
 
 With the dev compose override active, the API and bot source directories are bind-mounted and the API runs with `--reload`, so most code changes take effect without a rebuild. (See [Known gotchas](#known-gotchas) for the Windows reload caveat.)
 

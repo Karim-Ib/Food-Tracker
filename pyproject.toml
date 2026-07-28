@@ -31,7 +31,13 @@ dependencies = [
     "google-genai>=0.8",
 
     "pyzbar>=0.1.9",
-    "Pillow>=10.0"
+    "Pillow>=10.0",
+
+    # Weight-trend model and chart (API only — the shared manifest installs
+    # them into the bot image too, which is the cost of one dependency file)
+    "numpy>=2.1",
+    "pandas>=2.2",
+    "matplotlib>=3.9"
 ]
 
 [project.optional-dependencies]
@@ -47,6 +53,11 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 py-modules = []
+
+[tool.pytest.ini_options]
+# `app` lives under api/, so tests import app.services.* without an install.
+pythonpath = ["api"]
+testpaths = ["api/tests"]
 
 [tool.ruff]
 line-length = 100

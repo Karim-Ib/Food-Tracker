@@ -20,7 +20,10 @@ photo — send a barcode photo to look up a packaged product
 
 *Body*
 /weight <kg> — log body weight (e.g. /weight 80.5)
+/weight <kg> seed — log a remembered weight, excluded from the trend
 /weight — show recent weight entries
+/weight\_model — weight trend chart with fit and step-down trigger
+/weight\_model <months> — same, projected N months out (upper bound, not a forecast)
 
 *Goals*
 /goal — show current targets
