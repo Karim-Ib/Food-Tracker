@@ -173,31 +173,6 @@ def projection(fit: Fit, targets: list[float], horizon_days: int = 150) -> dict:
     return out
 
 
-if __name__ == "__main__":
-    rows = [
-        ("2026-06-01 10:24", 109.00, True),   # seed: remembered, not measured
-        ("2026-06-21 10:30", 107.40, False), ("2026-06-21 22:23", 107.80, False),
-        ("2026-06-22 07:55", 108.20, False), ("2026-06-23 11:58", 108.20, False),
-        ("2026-06-25 10:12", 107.70, False), ("2026-07-03 13:42", 107.10, False),
-        ("2026-07-05 08:24", 107.30, False), ("2026-07-06 10:04", 106.40, False),
-        ("2026-07-07 09:54", 106.50, False), ("2026-07-08 20:54", 106.70, False),
-        ("2026-07-12 12:08", 106.30, False), ("2026-07-13 11:58", 104.90, False),
-        ("2026-07-14 06:46", 105.40, False), ("2026-07-15 06:46", 105.40, False),
-        ("2026-07-16 07:15", 105.50, False), ("2026-07-17 10:09", 105.50, False),
-        ("2026-07-18 11:45", 104.90, False), ("2026-07-19 16:58", 105.50, False),
-        ("2026-07-20 09:13", 105.30, False), ("2026-07-21 09:50", 104.40, False),
-        ("2026-07-23 07:13", 104.70, False), ("2026-07-24 07:02", 103.80, False),
-        ("2026-07-25 16:27", 103.30, False),
-    ]
-    data = [WeighIn(datetime.strptime(t, "%Y-%m-%d %H:%M"), kg, s)
-            for t, kg, s in rows]
-
-    f = fit_trend(data)
-    print(f"n={f.n}  slope={f.slope_per_week:.3f} kg/wk  "
-          f"SE={f.se_per_week:.3f}  r2={f.r2:.3f}  sd={f.resid_sd:.3f}")
-    lo, hi = f.ci_per_week()
-    print(f"95% CI: {lo:.3f} to {hi:.3f} kg/wk")
-    print("rolling 14d slope:", rolling_slope(data))
-    print("trigger:", trigger_state(data))
-    for kg, info in projection(f, [100, 95, 90, 86]).items():
-        print(f"  {kg}kg -> {info['date'].date()} (day {info['days_from_t0']:.0f})")
+# The reference series this model was validated against lives in
+# api/tests/test_weight_model.py, which pins the fit to its known-good numbers.
+# Run `make test` rather than executing this module directly.

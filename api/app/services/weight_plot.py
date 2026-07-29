@@ -16,18 +16,16 @@ import matplotlib.pyplot as plt
 from matplotlib.dates import DateFormatter
 import pandas as pd
 
-from app.services.weight_model import WeighIn, fit_trend, _clean, _to_days
+from app.services.weight_model import fit_trend, _clean, _to_days
 
 _C_FIT, _C_PROJ, _C_PT, _C_SEED = "#4C72B0", "#C44E52", "#2b2b2b", "#888888"
-
-_DEFAULT_TARGETS = [(100, "100 kg"), (95, "95 · 'trained'"),
-                    (90, "90 · ~15%"), (86, "86 · ~12%")]
 
 
 def render_trend_figure(data, targets=None, horizon_days=152,
                         show_seed=True, title=None):
-    if targets is None:
-        targets = _DEFAULT_TARGETS
+    # No targets unless the caller supplies them. They are generated per-user
+    # from that user's goal and weight range — see weight_trend.build_targets.
+    targets = targets or []
 
     fit = fit_trend(data)
     measured = _clean(data)
